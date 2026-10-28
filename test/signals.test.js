@@ -8,7 +8,7 @@ import { signalAgeMs, signalKey, sequenceGap } from "../src/signals.js";
 import { loadConfig, parseNum } from "../src/config.js";
 import { openPaper, openCount, isOpen, loadPositions, getConsumerState, _resetPaperStateForTests } from "../src/paper.js";
 import { handle, pollOnce, shutdown, _resetMainStateForTests } from "../src/main.js";
-import worker, { SignalQueueDO } from "../worker/index.js";
+import worker, { SignalQueueDO, timingSafeEqualString } from "../worker/index.js";
 
 test("signal identity distinguishes transactions for the same mint", () => {
   assert.notEqual(
@@ -1027,4 +1027,81 @@ test("SignalQueueDO migration and KV fallback preserve alerted TTL accurately, h
     assert.equal(okRes2.status, 200);
     assert.equal((await okRes2.json()).alertedUntil, targetExpSec * 1000);
   }
+});
+
+test("Worker auth timingSafeEqualString and webhook batch/size limits", async () => {
+  // 1) Constant-time auth comparison unit tests
+  assert.equal(await timingSafeEqualString("secret-123", "secret-123"), true);
+  assert.equal(await timingSafeEqualString("secret-123", "secret-124"), false);
+  assert.equal(await timingSafeEqualString("secret-123", "secret-12"), false);
+  assert.equal(await timingSafeEqualString("", "secret-123"), false);
+  assert.equal(await timingSafeEqualString(null, "secret-123"), false);
+  assert.equal(await timingSafeEqualString(undefined, "secret-123"), false);
+
+  // 2) Worker /hook batch limit (cap at 100 transactions)
+  let doInstance = null;
+  const storage = createRealSqliteStorage();
+  const env = {
+    HELIUS_AUTH: "test-helius-key",
+    APP_KEY: "test-app-key",
+    SIGNAL_QUEUE: {
+      idFromName: () => "global-id",
+      get: () => {
+        if (!doInstance) doInstance = new SignalQueueDO({ storage }, env);
+        return doInstance;
+      },
+    },
+  };
+
+  const oversizedBatch = Array.from({ length: 101 }, (_, i) => ({
+    signature: `sig-${i}`,
+    tokenTransfers: [{ mint: `mint-${i}` }],
+  }));
+
+  const batchLimitRes = await worker.fetch(
+    new Request("https://worker.local/hook", {
+      method: "POST",
+      headers: {
+        authorization: "test-helius-key",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(oversizedBatch),
+    }),
+    env,
+  );
+  assert.equal(batchLimitRes.status, 400);
+  const batchErr = await batchLimitRes.json();
+  assert.equal(batchErr.error, "batch_limit_exceeded");
+  assert.equal(batchErr.max, 100);
+  assert.equal(batchErr.received, 101);
+
+  // 3) Payload byte size limit (> 256 KB)
+  const hugePayload = "x".repeat(300 * 1024);
+  const sizeLimitRes = await worker.fetch(
+    new Request("https://worker.local/hook", {
+      method: "POST",
+      headers: {
+        authorization: "test-helius-key",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ huge: hugePayload }),
+    }),
+    env,
+  );
+  assert.equal(sizeLimitRes.status, 413);
+  assert.equal((await sizeLimitRes.json()).error, "payload_too_large");
+
+  // 4) Unauthorized /hook rejection
+  const unauthorizedRes = await worker.fetch(
+    new Request("https://worker.local/hook", {
+      method: "POST",
+      headers: {
+        authorization: "wrong-auth",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify([]),
+    }),
+    env,
+  );
+  assert.equal(unauthorizedRes.status, 401);
 });

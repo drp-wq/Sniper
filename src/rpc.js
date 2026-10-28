@@ -15,17 +15,18 @@ export function redactSecrets(input, extraSecrets = []) {
   out = out.replace(/https?:\/\/[^\s"'<>]+/gi, (match) => {
     try {
       const u = new URL(match);
-      return `${u.protocol}//${u.host}${u.pathname}${u.search ? "?[REDACTED]" : ""}`;
+      const portPart = u.port ? ":" + u.port : "";
+      return `${u.protocol}//${u.hostname}${portPart}${u.pathname}${u.search ? "?[REDACTED]" : ""}`;
     } catch {
       return "[REDACTED_URL]";
     }
   });
 
   // Redact common query/header key patterns and Bearer tokens
-  out = out.replace(/([?&](?:api[-_]?key|key|token|auth|secret)=)[^&\s"'<>]+/gi, "$1[REDACTED]");
+  out = out.replace(/([?&](?:api[-_]?key|key|token|auth|secret|password)=)[^&\s"'<>]+/gi, "$1[REDACTED]");
   out = out.replace(/(authorization\s*[:=]\s*bearer\s+)[^\s,"'<>]+/gi, "$1[REDACTED]");
   out = out.replace(/(\bbearer\s+)[^\s,"'<>]+/gi, "$1[REDACTED]");
-  out = out.replace(/((?:api[-_]?key|x-key|authorization)\s*[:=]\s*)[^\s,"'<>]+/gi, "$1[REDACTED]");
+  out = out.replace(/((?:api[-_]?key|x-key|authorization|password|token)\s*[:=]\s*)[^\s,"'<>]+/gi, "$1[REDACTED]");
 
   for (const s of secrets) {
     if (s.length >= 4) {

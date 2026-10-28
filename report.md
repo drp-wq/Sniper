@@ -2,7 +2,7 @@
 
 > **Mode**: Strictly Read-Only Audit (`REPORT FIRST, NO CODE CHANGES`)
 > **Repository**: `https://github.com/drp-wq/Sniper`
-> **Evaluated Branch / Commit**: `main` @ `27d30ef30e63ea62d66fa99a1c09fba6a00f3671`
+> **Evaluated Branch / Commit**: `main` @ `15cf45c6ecd7dc008de8fd20a59b1fab509133cd` (code baseline identical to `27d30ef30e63ea62d66fa99a1c09fba6a00f3671`)
 > **Audit Date**: 2026-10-28
 
 ---
@@ -11,7 +11,7 @@
 
 ### Release-Readiness Verdict: **NO-GO FOR UNTRUSTED NETWORK / PRODUCTION RELEASE UNTIL P0 & P1 FINDINGS ARE REMEDIATED**
 
-While the headless Node.js CLI paper-trading engine (`src/main.js`, `src/paper.js`, `src/gate.js`, `src/price.js`, `src/report.js`) and the Cloudflare Worker SQLite Durable Object relay (`worker/index.js`) have strong transactional guarantees, atomic `MAX_OPEN` enforcement, and 35 passing unit/integration tests, the integrated **Dashboard / WebView / Proxy layer** (`dashboard/`, `src/ui.js`, `app/android/`) introduces **two Critical**, **five High**, and **six Medium** security and paper-trading integrity vulnerabilities:
+While the headless Node.js CLI paper-trading engine (`src/main.js`, `src/paper.js`, `src/gate.js`, `src/price.js`, `src/report.js`) and the Cloudflare Worker SQLite Durable Object relay (`worker/index.js`) have strong transactional guarantees, atomic `MAX_OPEN` enforcement, and 35 passing unit/integration tests, the integrated **Dashboard / WebView / Proxy layer** (`dashboard/`, `src/ui.js`, `app/android/`) introduces **three Critical**, **four High**, **four Medium**, and **three Low/Informational** security and paper-trading integrity findings (9 demonstrated vulnerabilities and 5 theoretical or discrepancy risks):
 
 1. **Critical P0 Security Boundary Failures**:
    - **Unauthenticated Network-Exposed Open SSRF Proxy (`dashboard/server.ts:16-95`)**: Binds to `0.0.0.0:3000` with `Access-Control-Allow-Origin: *` and `app.all('/api/proxy')`, forwarding arbitrary HTTP methods, bodies, and destinations (`http://`, `https://`, `file://`, internal RFC1918/loopback/cloud metadata `169.254.169.254`, following redirects) with zero authentication or allowlisting.
@@ -174,15 +174,15 @@ While the headless Node.js CLI paper-trading engine (`src/main.js`, `src/paper.j
   }
   ```
 - **Reproducible Failure / Attack Scenario**:
-  1. `req.headers.get("authorization") !== env.HELIUS_AUTH` and `req.headers.get("x-key") !== env.APP_KEY` use standard JavaScript `!==` string comparison rather than constant-time comparison (`crypto.subtle.timingSafeEqual` on SHA-256 digests), theoretically leaking secret length/prefix timing signals.
-  2. `POST /hook` parses `await req.json()` without a body size cap or maximum batch length cap (`txs.length`). A large webhook payload or array with thousands of entries executes thousands of synchronous SQLite queries inside a single `transactionSync` block, risking Durable Object CPU/memory exhaustion.
+  1. `req.headers.get("authorization") !== env.HELIUS_AUTH` and `req.headers.get("x-key") !== env.APP_KEY` use standard JavaScript `!==` string comparison rather than constant-time comparison, theoretically leaking secret length/prefix timing signals over the network.
+  2. `POST /hook` parses `await req.json()` without a body size cap or maximum batch length cap (`txs.length`). A large webhook payload or array with thousands of entries executes thousands of synchronous SQLite queries inside a single `transactionSync` block, risking Durable Object CPU/memory exhaustion. Payloads must be explicitly rejected (never silently truncated with `txs.slice(0, 100)`).
 - **Impact & Likelihood**: **Medium Impact / Low-Medium Likelihood**.
 - **Confidence & Verification Status**: **Confirmed** by code inspection of `worker/index.js:279-355` and `worker/index.js:680-710`.
 - **Recommended Minimal Fix**:
-  1. Compare secrets using constant-time comparison via Web Crypto `crypto.subtle.verify("HMAC", ...)` (since `crypto.subtle.timingSafeEqual` does not exist in the Web Crypto standard).
-  2. Enforce a payload byte limit (e.g., `256 KB`) and cap `txs.length` at 100 in `/hook`.
+  1. Compare secrets using constant-time comparison via Web Crypto fixed SHA-256 hashing followed by constant-time XOR byte comparison (supported natively on Cloudflare Workers without dependencies; `crypto.subtle.timingSafeEqual` does not exist in standard Web Crypto).
+  2. Enforce a payload byte limit (`MAX_HOOK_BYTES = 256 * 1024`, returning HTTP 413) and cap `txs.length` at 100 in `/hook` (returning HTTP 400 `batch_limit_exceeded`, never silently slicing).
 - **Regression Tests Needed**:
-  - Unit tests verifying timing-safe auth helper rejects wrong/empty/null keys and accepts matching keys, and `/hook` rejects oversized payloads with `413`.
+  - Unit tests verifying timing-safe auth helper rejects wrong/empty/null keys and accepts matching keys, and `/hook` rejects oversized payloads with `413` or `400`.
 
 ---
 
@@ -543,7 +543,7 @@ In strict compliance with the read-only mission rules:
 
 > **Status**: **STRICT DIFF-FIRST GATE — PENDING EXPLICIT OPERATOR APPROVAL**  
 > **Evaluation Date**: 2026-10-28  
-> **Baseline Commit**: `main` @ `27d30ef30e63ea62d66fa99a1c09fba6a00f3671`
+> **Baseline Commit**: `main` @ `15cf45c6ecd7dc008de8fd20a59b1fab509133cd` (code baseline identical to `27d30ef30e63ea62d66fa99a1c09fba6a00f3671`)
 
 ### 8.1 Finding Verification Matrix
 
@@ -552,7 +552,7 @@ In strict compliance with the read-only mission rules:
 | **P0-01** | SSRF & Wildcard CORS in `dashboard/server.ts` | `dashboard/server.ts:16-95` | **Confirmed** | Express binds to `0.0.0.0:3000` with `Access-Control-Allow-Origin: *`. Endpoint `app.all('/api/proxy')` forwards any method and destination with zero origin/scheme/host/IP checks and default `redirect: 'follow'`, exposing localhost services and cloud metadata (`169.254.169.254`). |
 | **P0-02** | `APP_KEY` Exposure & Cross-Origin SSRF in `src/ui.js` | `src/ui.js:96-172` | **Confirmed** | Trust check `targetUrl.startsWith(cleanWorker)` uses a raw string prefix, allowing attacker domain `https://sniper-relay.example.workers.dev.attacker.com` to receive `x-key: runtimeCfg.appKey`. Mode A forwards caller-supplied `x-key` to arbitrary destinations. No `Origin` or `Sec-Fetch-Site` validation exists on `/api/proxy`. |
 | **P0-03** | Android WebView Navigation & `AndroidBridge` | `MainActivity.java:43-174`, `AndroidManifest.xml:19` | **Confirmed** | Default `WebViewClient` lacks `shouldOverrideUrlLoading`, keeping `@JavascriptInterface` active if external links load inside the WebView. `setAllowFileAccess(true)` and `usesCleartextTraffic="true"` remain enabled. `AndroidBridge.httpRequest` does not validate hosts, allows userinfo, and does not disable redirects. |
-| **P0-04** | Worker Request Size/Batch Limits & Non-Constant-Time Auth | `worker/index.js:279-285, 680-710` | **Partially Confirmed / Corrected** | `!==` string comparison leaks timing signals. However, `crypto.subtle.timingSafeEqual` does not exist in standard Web Crypto API; native constant-time comparison must use Web Crypto HMAC verification (`crypto.subtle.verify("HMAC", ...)`). `/hook` lacks payload byte caps and batch length caps. |
+| **P0-04** | Worker Request Size/Batch Limits & Non-Constant-Time Auth | `worker/index.js:279-285, 680-710` | **Confirmed** | `!==` string comparison leaks timing signals. Web Crypto on Cloudflare Workers does not support `crypto.subtle.timingSafeEqual`; timing-safe comparison must be implemented via fixed SHA-256 hashing + constant-time XOR byte comparison. `/hook` lacks payload byte caps and batch length caps (must explicitly reject with 413/400, never silently truncate). |
 | **P0-05** | Consistent Secret Redaction in Errors & Logs | `src/rpc.js:5-47`, `src/main.js:141-423`, `src/paper.js:117-511` | **Confirmed** | `redactSecrets` does not strip URL userinfo (`username:password@`). Multiple `logFn("error", { msg: String(e) })` and `logFn("gate_error", ...)` calls write raw exceptions directly to `logs/paper.jsonl` without redaction. |
 
 ### 8.2 Proposed Unified Diffs
@@ -631,16 +631,25 @@ In strict compliance with the read-only mission rules:
 +      return;
 +    }
 +
-+    // Destination validation: DexScreener, Worker origin, or RPC endpoints
++    // IP literal and cloud metadata rejection (IPv4, IPv6, octal, hex, loopback, link-local)
 +    const host = parsed.hostname.toLowerCase();
-+    const isDex = host === 'api.dexscreener.com' && parsed.pathname.startsWith('/latest/dex/tokens/');
-+    const isWorker = host.endsWith('.workers.dev') &&
-+      ['/signals', '/export-kv', '/heartbeat', '/halt', '/notify'].includes(parsed.pathname);
++    if (/^(?:\d+|0x[0-9a-f]+|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(host) ||
++        host === '169.254.169.254' || host === 'metadata.google.internal' || host === 'localhost') {
++      res.status(403).json({ error: 'Direct IP literals and metadata hosts are forbidden' });
++      return;
++    }
++
++    // Route-specific method and destination validation: DexScreener, Worker origin, or RPC
++    const configuredWorkerHost = process.env.WORKER_URL ? new URL(process.env.WORKER_URL).hostname.toLowerCase() : null;
++    const isDex = host === 'api.dexscreener.com' && parsed.pathname.startsWith('/latest/dex/tokens/') && req.method === 'GET';
++    const isWorker = configuredWorkerHost ? (host === configuredWorkerHost) : host.endsWith('.workers.dev');
++    const isWorkerRead = isWorker && (parsed.pathname === '/signals' || parsed.pathname === '/export-kv') && req.method === 'GET';
++    const isWorkerMutation = isWorker && (parsed.pathname === '/heartbeat' || parsed.pathname === '/halt' || parsed.pathname === '/notify') && req.method === 'POST';
 +    const isRpc = (host === 'api.mainnet-beta.solana.com' || host.endsWith('.helius-rpc.com') || host.endsWith('.quiknode.pro')) &&
 +      req.method === 'POST';
 +
-+    if (!isDex && !isWorker && !isRpc) {
-+      res.status(403).json({ error: 'Target destination is not in allowlist' });
++    if (!isDex && !isWorkerRead && !isWorkerMutation && !isRpc) {
++      res.status(403).json({ error: 'Target destination, method, or path is not permitted' });
 +      return;
 +    }
 +
@@ -690,8 +699,8 @@ In strict compliance with the read-only mission rules:
      const url = new URL(req.url || "/", "http://127.0.0.1");
      const path = url.pathname;
 +
-+    // Helper: validate target destination and path against strict allowlist
-+    function validateProxyTarget(targetStr) {
++    // Helper: validate target destination, route, and method against strict allowlist
++    function validateProxyTarget(targetStr, method = "GET") {
 +      let u;
 +      try {
 +        u = new URL(targetStr);
@@ -702,8 +711,11 @@ In strict compliance with the read-only mission rules:
 +      if (u.username || u.password) return null;
 +
 +      const hostname = u.hostname.toLowerCase();
-+      // Reject cloud metadata, link-local, loopback literals
-+      if (hostname === "169.254.169.254" || hostname === "metadata.google.internal") return null;
++      // Reject IP literals (IPv4, IPv6, octal, hex), cloud metadata, and loopback
++      if (/^(?:\d+|0x[0-9a-f]+|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(hostname) ||
++          hostname === "169.254.169.254" || hostname === "metadata.google.internal" || hostname === "localhost") {
++        return null;
++      }
 +
 +      let parsedWorker = null;
 +      try {
@@ -719,14 +731,16 @@ In strict compliance with the read-only mission rules:
 +      const isRpcOrigin = parsedRpc && u.origin === parsedRpc.origin;
 +      const isDexOrigin = u.origin === "https://api.dexscreener.com";
 +
-+      const allowedWorkerPaths = new Set(["/signals", "/export-kv", "/heartbeat", "/halt", "/notify"]);
-+      if (isWorkerOrigin && allowedWorkerPaths.has(u.pathname)) {
++      const isWorkerRead = isWorkerOrigin && (u.pathname === "/signals" || u.pathname === "/export-kv") && method === "GET";
++      const isWorkerMutation = isWorkerOrigin && (u.pathname === "/heartbeat" || u.pathname === "/halt" || u.pathname === "/notify") && method === "POST";
++
++      if (isWorkerRead || isWorkerMutation) {
 +        return { parsed: u, type: "worker" };
 +      }
-+      if (isRpcOrigin) {
++      if (isRpcOrigin && method === "POST") {
 +        return { parsed: u, type: "rpc" };
 +      }
-+      if (isDexOrigin && u.pathname.startsWith("/latest/dex/tokens/")) {
++      if (isDexOrigin && u.pathname.startsWith("/latest/dex/tokens/") && method === "GET") {
 +        return { parsed: u, type: "dex" };
 +      }
 +      return null;
@@ -766,7 +780,7 @@ In strict compliance with the read-only mission rules:
 -          if (!/^https?:\/\//i.test(targetUrl)) {
 -            return sendJson(res, 400, { error: "invalid target url" });
 -          }
-+          const targetInfo = validateProxyTarget(targetUrl);
++          const targetInfo = validateProxyTarget(targetUrl, req.method || "GET");
 +          if (!targetInfo) {
 +            return sendJson(res, 403, { error: "forbidden target destination or path" });
 +          }
@@ -794,7 +808,7 @@ In strict compliance with the read-only mission rules:
          }
 -        if (!/^https?:\/\//i.test(targetUrl)) {
 -          return sendJson(res, 400, { error: "invalid target url" });
-+        const targetInfo = validateProxyTarget(targetUrl);
++        const targetInfo = validateProxyTarget(targetUrl, method);
 +        if (!targetInfo) {
 +          return sendJson(res, 403, { error: "forbidden target destination or path" });
          }
@@ -966,15 +980,17 @@ In strict compliance with the read-only mission rules:
 +    return false;
 +  }
 +  const enc = new TextEncoder();
-+  const key = await crypto.subtle.importKey(
-+    "raw",
-+    enc.encode("sniper-auth-constant-v1"),
-+    { name: "HMAC", hash: "SHA-256" },
-+    false,
-+    ["sign", "verify"],
-+  );
-+  const expectedMac = await crypto.subtle.sign("HMAC", key, enc.encode(expected));
-+  return crypto.subtle.verify("HMAC", key, expectedMac, enc.encode(provided));
++  const [hashA, hashB] = await Promise.all([
++    crypto.subtle.digest("SHA-256", enc.encode(provided)),
++    crypto.subtle.digest("SHA-256", enc.encode(expected)),
++  ]);
++  const a = new Uint8Array(hashA);
++  const b = new Uint8Array(hashB);
++  let diff = 0;
++  for (let i = 0; i < 32; i++) {
++    diff |= a[i] ^ b[i];
++  }
++  return diff === 0 && provided.length === expected.length;
 +}
 @@ -280,6 +295,9 @@ export class SignalQueueDO {
        if (path === "/hook" && req.method === "POST") {

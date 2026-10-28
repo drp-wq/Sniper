@@ -100,13 +100,57 @@ test("UI server serves mobile command center HTML, APK download, and secret-safe
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        url: "https://failing.example.com/?api-key=SUPER_SECRET_RPC_888",
+        url: "https://sniper-relay.example.workers.dev/fail?api-key=SUPER_SECRET_RPC_888",
         method: "GET",
       }),
     });
     const proxyErrJson = await proxyErr.json();
     assert.equal(proxyErr.status, 502);
     assert.equal(proxyErrJson.error.includes("SUPER_SECRET_RPC_888"), false);
+
+    // 5b) Security: /api/proxy rejects unapproved targets, prefix-spoofed domains, and IP literals
+    const proxyBlockedExternal = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "https://failing.example.com/",
+        method: "GET",
+      }),
+    });
+    assert.equal(proxyBlockedExternal.status, 403);
+
+    const proxyBlockedPrefix = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "https://sniper-relay.example.workers.dev.attacker.com/steal",
+        method: "GET",
+      }),
+    });
+    assert.equal(proxyBlockedPrefix.status, 403);
+
+    const proxyBlockedIp = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "http://169.254.169.254/latest/meta-data/",
+        method: "GET",
+      }),
+    });
+    assert.equal(proxyBlockedIp.status, 403);
+
+    const proxyBlockedCrossSite = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({
+        url: "https://sniper-relay.example.workers.dev/export-kv",
+        method: "GET",
+      }),
+    });
+    assert.equal(proxyBlockedCrossSite.status, 403);
 
     // 6) /download/sniper-paper-bot.apk serves compiled APK binary
     const apkRes = await fetch(`${baseUrl}/download/sniper-paper-bot.apk`);

@@ -13,12 +13,32 @@ const QMAX = 50;                    // keep the last 50 signals in the active ri
 const DEDUP_MAX = 1000;             // keep the last 1000 (sig, mint) pairs for delayed retry deduplication
 const HB_LATE_MS = 12 * 60 * 1000;  // alert if the phone is silent this long
 const HB_MIN_WRITE_MS = 5 * 60 * 1000; // throttle unchanged heartbeat writes
+export const MAX_HOOK_BYTES = 256 * 1024; // 256 KB max payload for webhooks
+export const MAX_BATCH_TXS = 100; // 100 tx batch limit to prevent DO overload
 
 const json = (o, status = 200) =>
   new Response(JSON.stringify(o), {
     status,
     headers: { "content-type": "application/json" },
   });
+
+export async function timingSafeEqualString(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string" || !provided || !expected) {
+    return false;
+  }
+  const enc = new TextEncoder();
+  const [hashA, hashB] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(provided)),
+    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+  ]);
+  const a = new Uint8Array(hashA);
+  const b = new Uint8Array(hashB);
+  let diff = 0;
+  for (let i = 0; i < 32; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0 && provided.length === expected.length;
+}
 
 function redactWorkerError(err, env = {}) {
   let msg = String(err?.message || err || "storage_error");
@@ -283,6 +303,9 @@ export class SignalQueueDO {
         }
 
         const txs = Array.isArray(body) ? body : [body];
+        if (txs.length > MAX_BATCH_TXS) {
+          return json({ error: "batch_limit_exceeded", max: MAX_BATCH_TXS, received: txs.length }, 400);
+        }
         const result = this._runTransaction(() => {
           let seq = Number(this._getMeta("seq", "0")) || 0;
           let added = 0;
@@ -540,6 +563,9 @@ async function handleWithKvFallback(req, env) {
       }
 
       const txs = Array.isArray(body) ? body : [body];
+      if (txs.length > MAX_BATCH_TXS) {
+        return json({ error: "batch_limit_exceeded", max: MAX_BATCH_TXS, received: txs.length }, 400);
+      }
       await withKvMutex(env.KV, async () => {
         const q = await readKvQ(env);
         const seenSigs = Array.isArray(q.seenSigs) ? q.seenSigs : [];
@@ -678,16 +704,31 @@ export default {
 
     // Helius webhook (its own auth header).
     if (path === "/hook" && req.method === "POST") {
-      if (!env.HELIUS_AUTH || req.headers.get("authorization") !== env.HELIUS_AUTH) {
+      const authHeader = req.headers.get("authorization");
+      if (!env.HELIUS_AUTH || !(await timingSafeEqualString(authHeader, env.HELIUS_AUTH))) {
         return json({ error: "unauthorized" }, 401);
       }
+      const contentLength = req.headers.get("content-length");
+      if (contentLength && parseInt(contentLength, 10) > MAX_HOOK_BYTES) {
+        return json({ error: "payload_too_large" }, 413);
+      }
+      const rawText = await req.text();
+      if (new TextEncoder().encode(rawText).length > MAX_HOOK_BYTES) {
+        return json({ error: "payload_too_large" }, 413);
+      }
+      const forwardReq = new Request(req.url, {
+        method: req.method,
+        headers: req.headers,
+        body: rawText,
+      });
       const stub = getQueueStub(env);
-      if (stub) return stub.fetch(req);
-      return handleWithKvFallback(req, env);
+      if (stub) return stub.fetch(forwardReq);
+      return handleWithKvFallback(forwardReq, env);
     }
 
     // Everything below requires the app key.
-    if (!env.APP_KEY || req.headers.get("x-key") !== env.APP_KEY) {
+    const clientKey = req.headers.get("x-key");
+    if (!env.APP_KEY || !(await timingSafeEqualString(clientKey, env.APP_KEY))) {
       return json({ error: "unauthorized" }, 401);
     }
 

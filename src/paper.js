@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { cfg } from "./config.js";
 import { getQuote } from "./price.js";
 import { log } from "./log.js";
+import { redactSecrets } from "./rpc.js";
 import { notify } from "./api.js";
 
 const R = cfg.rules;
@@ -114,7 +115,7 @@ export function savePositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
     renameFn(tmpFile, stateFile);
     return true;
   } catch (e) {
-    logFn("error", { where: "savePositions", msg: String(e) });
+    logFn("error", { where: "savePositions", msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]) });
     return false;
   }
 }
@@ -214,7 +215,7 @@ export function loadPositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
     }
     return restored;
   } catch (e) {
-    logFn("error", { where: "loadPositions", msg: String(e) });
+    logFn("error", { where: "loadPositions", msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]) });
     return 0;
   }
 }

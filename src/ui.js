@@ -58,6 +58,53 @@ export function createUiHandler(deps = {}) {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     const path = url.pathname;
 
+    // Helper: validate target destination, route, and method against strict allowlist
+    function validateProxyTarget(targetStr, method = "GET") {
+      let u;
+      try {
+        u = new URL(targetStr);
+      } catch {
+        return null;
+      }
+      if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+      if (u.username || u.password) return null;
+
+      const hostname = u.hostname.toLowerCase();
+      // Reject IP literals (IPv4, IPv6, octal, hex), cloud metadata, and loopback
+      if (/^(?:\d+|0x[0-9a-f]+|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(hostname) ||
+          hostname === "169.254.169.254" || hostname === "metadata.google.internal" || hostname === "localhost") {
+        return null;
+      }
+
+      let parsedWorker = null;
+      try {
+        if (runtimeCfg.workerUrl) parsedWorker = new URL(runtimeCfg.workerUrl);
+      } catch {}
+
+      let parsedRpc = null;
+      try {
+        if (runtimeCfg.rpcUrl) parsedRpc = new URL(runtimeCfg.rpcUrl);
+      } catch {}
+
+      const isWorkerOrigin = parsedWorker && u.origin === parsedWorker.origin;
+      const isRpcOrigin = parsedRpc && u.origin === parsedRpc.origin;
+      const isDexOrigin = u.origin === "https://api.dexscreener.com";
+
+      const isWorkerRead = isWorkerOrigin && (u.pathname === "/signals" || u.pathname === "/export-kv" || u.pathname === "/fail") && method === "GET";
+      const isWorkerMutation = isWorkerOrigin && (u.pathname === "/heartbeat" || u.pathname === "/halt" || u.pathname === "/notify") && method === "POST";
+
+      if (isWorkerRead || isWorkerMutation) {
+        return { parsed: u, type: "worker" };
+      }
+      if (isRpcOrigin) {
+        return { parsed: u, type: "rpc" };
+      }
+      if (isDexOrigin && u.pathname.startsWith("/latest/dex/tokens/") && method === "GET") {
+        return { parsed: u, type: "dex" };
+      }
+      return null;
+    }
+
     if (path === "/api/status" && req.method === "GET") {
       let openPositions = [];
       let archivedPositions = [];
@@ -94,6 +141,24 @@ export function createUiHandler(deps = {}) {
     }
 
     if (path === "/api/proxy") {
+      // Reject untrusted cross-origin requests
+      const secFetchSite = req.headers["sec-fetch-site"];
+      if (secFetchSite === "cross-site") {
+        return sendJson(res, 403, { error: "cross-site requests forbidden" });
+      }
+      const origin = req.headers.origin;
+      if (origin) {
+        try {
+          const o = new URL(origin);
+          const isLocal = (o.hostname === "127.0.0.1" || o.hostname === "localhost");
+          if (!isLocal) {
+            return sendJson(res, 403, { error: "cross-origin requests forbidden" });
+          }
+        } catch {
+          return sendJson(res, 403, { error: "invalid origin header" });
+        }
+      }
+
       try {
         const headerTargetUrl = req.headers["x-target-url"] ? String(req.headers["x-target-url"]).trim() : "";
         const rawBody = req.method !== "GET" && req.method !== "HEAD" ? await readRequestBody(req) : "";
@@ -104,23 +169,23 @@ export function createUiHandler(deps = {}) {
           if (targetUrl === "https://api.mainnet-beta.solana.com" || targetUrl === "__SERVER_ENV_RPC_URL__") {
             targetUrl = runtimeCfg.rpcUrl;
           }
-          if (!/^https?:\/\//i.test(targetUrl)) {
-            return sendJson(res, 400, { error: "invalid target url" });
+          const method = req.method || "GET";
+          const targetInfo = validateProxyTarget(targetUrl, method);
+          if (!targetInfo) {
+            return sendJson(res, 403, { error: "forbidden target destination or path" });
           }
 
           const headers = { "content-type": "application/json" };
-          const reqXKey = req.headers["x-key"] ? String(req.headers["x-key"]).trim() : "";
-          const cleanWorker = (runtimeCfg.workerUrl || "").replace(/\/$/, "");
-          if (reqXKey) {
-            headers["x-key"] = reqXKey;
-          } else if (cleanWorker && targetUrl.startsWith(cleanWorker) && runtimeCfg.appKey) {
+          // Only forward APP_KEY to exact verified Worker origin
+          if (targetInfo.type === "worker" && runtimeCfg.appKey) {
             headers["x-key"] = runtimeCfg.appKey;
           }
 
           const upstream = await fetchFn(targetUrl, {
-            method: req.method || "GET",
+            method,
             headers,
             body: req.method !== "GET" && req.method !== "HEAD" && rawBody ? rawBody : undefined,
+            redirect: "error",
             signal: AbortSignal.timeout(10000),
           });
           const data = await upstream.json().catch(() => ({}));
@@ -131,27 +196,29 @@ export function createUiHandler(deps = {}) {
         const parsed = JSON.parse(rawBody || "{}");
         let targetUrl = String(parsed.url || "").trim();
         const method = String(parsed.method || "GET").toUpperCase();
-        const headers = { ...(parsed.headers && typeof parsed.headers === "object" ? parsed.headers : {}) };
         const reqBody = parsed.body ?? null;
 
         if (targetUrl === "__SERVER_ENV_RPC_URL__" || targetUrl === "https://api.mainnet-beta.solana.com") {
           targetUrl = runtimeCfg.rpcUrl;
         }
 
-        if (!/^https?:\/\//i.test(targetUrl)) {
-          return sendJson(res, 400, { error: "invalid target url" });
+        const targetInfo = validateProxyTarget(targetUrl, method);
+        if (!targetInfo) {
+          return sendJson(res, 403, { error: "forbidden target destination or path" });
         }
 
-        const cleanWorker = (runtimeCfg.workerUrl || "").replace(/\/$/, "");
-        if (cleanWorker && targetUrl.startsWith(cleanWorker) && !headers["x-key"] && runtimeCfg.appKey) {
-          headers["x-key"] = runtimeCfg.appKey;
+        const safeHeaders = { "content-type": "application/json" };
+        // Forward APP_KEY only to verified Worker endpoints; do not forward caller x-key
+        if (targetInfo.type === "worker" && runtimeCfg.appKey) {
+          safeHeaders["x-key"] = runtimeCfg.appKey;
         }
 
         const started = Date.now();
         const upstream = await fetchFn(targetUrl, {
           method,
-          headers,
+          headers: safeHeaders,
           body: method !== "GET" && method !== "HEAD" && reqBody ? reqBody : undefined,
+          redirect: "error",
           signal: AbortSignal.timeout(10000),
         });
         const latencyMs = Date.now() - started;

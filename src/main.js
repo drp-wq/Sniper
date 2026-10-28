@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { cfg } from "./config.js";
+import { redactSecrets } from "./rpc.js";
 import { getSignals, heartbeat, notify } from "./api.js";
 import { runGate } from "./gate.js";
 import {
@@ -138,7 +139,7 @@ export async function handle(s, deps = {}) {
       sig: s.sig || null,
       receivedAgeMs,
       gateMs: nowFn() - gateStartedAt,
-      msg: String(e),
+      msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]),
     });
     return { ok: false, retryable: true, reason: "gate_error" };
   }
@@ -304,7 +305,7 @@ export async function pollOnce(deps = {}) {
         signalId: s?.id ?? null,
         signalKey: key,
         mint: s?.mint ?? null,
-        msg: String(e),
+        msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]),
       });
       res = { ok: false, retryable: true };
     }
@@ -396,7 +397,7 @@ async function pollLoop() {
   try {
     await pollOnce();
   } catch (e) {
-    log("error", { where: "poll", msg: String(e) });
+    log("error", { where: "poll", msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]) });
   }
   if (!stopping) {
     setTimeout(pollLoop, cfg.pollMs);
@@ -420,7 +421,7 @@ export function startBot() {
   pollLoop();
 
   setInterval(
-    () => tick().catch((e) => log("error", { where: "tick", msg: String(e) })),
+    () => tick().catch((e) => log("error", { where: "tick", msg: redactSecrets(String(e), [cfg.rpcUrl, cfg.appKey]) })),
     cfg.priceMs,
   );
 
