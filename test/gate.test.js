@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { runGate } from "../src/gate.js";
+import { rpc, redactSecrets } from "../src/rpc.js";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 const RAYDIUM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
@@ -106,4 +107,81 @@ test("runGate aggregates multiple token accounts owned by the same wallet and ex
   assert.equal(res.top10Pct, 39);
   assert.equal(res.pass, false);
   assert.ok(res.reasons[0].includes("39.0%"));
+});
+
+test("rpc checks HTTP status (429/500), handles malformed JSON, and redacts API keys on network/RPC errors", async () => {
+  const secretRpcUrl = "https://mainnet.helius-rpc.com/?api-key=SUPER_SECRET_HELIUS_KEY_999";
+
+  // 1) HTTP 429 status check before JSON parsing
+  await assert.rejects(
+    () =>
+      rpc("getAccountInfo", ["mint-1"], {
+        rpcUrl: secretRpcUrl,
+        fetch: async () => ({
+          ok: false,
+          status: 429,
+          json: async () => {
+            throw new Error("should not parse JSON on HTTP 429");
+          },
+        }),
+      }),
+    (err) => {
+      assert.match(err.message, /getAccountInfo: HTTP 429/);
+      assert.equal(err.message.includes("SUPER_SECRET_HELIUS_KEY_999"), false);
+      return true;
+    },
+  );
+
+  // 2) HTTP 500 status check
+  await assert.rejects(
+    () =>
+      rpc("getTokenSupply", ["mint-1"], {
+        rpcUrl: secretRpcUrl,
+        fetch: async () => ({ ok: false, status: 500 }),
+      }),
+    /getTokenSupply: HTTP 500/,
+  );
+
+  // 3) Malformed JSON on HTTP 200
+  await assert.rejects(
+    () =>
+      rpc("getTokenSupply", ["mint-1"], {
+        rpcUrl: secretRpcUrl,
+        fetch: async () => ({
+          ok: true,
+          status: 200,
+          json: async () => {
+            throw new SyntaxError("Unexpected token < in JSON");
+          },
+        }),
+      }),
+    /getTokenSupply: malformed JSON response/,
+  );
+
+  // 4) Network failure with URL & API key in error message + cause
+  await assert.rejects(
+    () =>
+      rpc("getMultipleAccounts", [[]], {
+        rpcUrl: secretRpcUrl,
+        fetch: async () => {
+          const e = new TypeError(`fetch failed for ${secretRpcUrl}`);
+          e.cause = new Error("connect ECONNREFUSED ?api-key=SUPER_SECRET_HELIUS_KEY_999");
+          throw e;
+        },
+      }),
+    (err) => {
+      assert.match(err.message, /getMultipleAccounts: network error:/);
+      assert.equal(err.message.includes("SUPER_SECRET_HELIUS_KEY_999"), false);
+      assert.ok(err.message.includes("[REDACTED]"));
+      return true;
+    },
+  );
+
+  // 5) JSON-RPC error object containing secret or authorization header
+  const redacted = redactSecrets(
+    "Upstream failed at https://mainnet.helius-rpc.com/?api-key=MY_KEY_12345 with authorization: Bearer SECRET_BEARER_TOKEN",
+    [secretRpcUrl],
+  );
+  assert.equal(redacted.includes("MY_KEY_12345"), false);
+  assert.equal(redacted.includes("SECRET_BEARER_TOKEN"), false);
 });

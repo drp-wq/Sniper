@@ -11,6 +11,7 @@ import { signalAgeMs, signalKey, sequenceGap } from "./signals.js";
 let since = 0;
 const seen = new Set();
 const SEEN_MAX = 5000;
+let stopping = false;
 
 function rememberKey(key) {
   seen.add(key);
@@ -233,18 +234,45 @@ export async function pollOnce(deps = {}) {
   }
 }
 
+export function shutdown(signal = "SIGINT", deps = {}) {
+  if (stopping) return false;
+  stopping = true;
+
+  const saveFn = deps.savePositions ?? savePositions;
+  const logFn = deps.log ?? log;
+  const openCountFn = deps.openCount ?? openCount;
+  const isTest =
+    process.env.NODE_ENV === "test" ||
+    process.env.NODE_TEST_CONTEXT !== undefined ||
+    process.execArgv.some((arg) => arg.startsWith("--test"));
+  const exitFn = deps.exit ?? (isTest ? () => {} : (code) => process.exit(code));
+
+  const persisted = Boolean(saveFn(deps.stateFile, deps));
+  logFn("stop", {
+    signal,
+    persisted,
+    openPositions: openCountFn(),
+  });
+  exitFn(0);
+  return true;
+}
+
 export function _resetMainStateForTests(initialSince = 0) {
   since = initialSince;
   seen.clear();
+  stopping = false;
 }
 
 async function pollLoop() {
+  if (stopping) return;
   try {
     await pollOnce();
   } catch (e) {
     log("error", { where: "poll", msg: String(e) });
   }
-  setTimeout(pollLoop, cfg.pollMs);
+  if (!stopping) {
+    setTimeout(pollLoop, cfg.pollMs);
+  }
 }
 
 export function startBot() {
@@ -268,11 +296,9 @@ export function startBot() {
   setInterval(() => heartbeat(openCount()), cfg.heartbeatMs);
   heartbeat(openCount());
 
-  process.on("SIGINT", () => {
-    savePositions();
-    log("stop", { openPositions: openCount() });
-    process.exit(0);
-  });
+  for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.on(sig, () => shutdown(sig));
+  }
 }
 
 const isDirectRun =

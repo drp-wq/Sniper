@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { signalAgeMs, signalKey, sequenceGap } from "../src/signals.js";
 import { loadConfig, parseNum } from "../src/config.js";
 import { openPaper, openCount, isOpen, _resetPaperStateForTests } from "../src/paper.js";
-import { handle, pollOnce, _resetMainStateForTests } from "../src/main.js";
+import { handle, pollOnce, shutdown, _resetMainStateForTests } from "../src/main.js";
 import worker from "../worker/index.js";
 
 test("signal identity distinguishes transactions for the same mint", () => {
@@ -193,4 +193,50 @@ test("worker deduplicates by (sig, mint) while allowing new transactions for the
   assert.equal(data.signals.length, 2);
   assert.equal(data.signals[0].sig, "sig-1");
   assert.equal(data.signals[1].sig, "sig-2");
+});
+
+test("shutdown handler is idempotent across SIGINT/SIGTERM/SIGHUP, persists state first, and does not exit in tests", () => {
+  _resetMainStateForTests(0);
+  const order = [];
+  const events = [];
+
+  const first = shutdown("SIGTERM", {
+    savePositions: () => {
+      order.push("savePositions");
+      return true;
+    },
+    log: (ev, data) => {
+      order.push(`log:${ev}`);
+      events.push({ ev, ...data });
+    },
+    openCount: () => 3,
+  });
+
+  // Subsequent signals (SIGINT, SIGHUP) are no-ops
+  const second = shutdown("SIGINT", {
+    savePositions: () => {
+      order.push("savePositions-duplicate");
+      return true;
+    },
+    log: (ev) => order.push(`log-duplicate:${ev}`),
+    openCount: () => 3,
+  });
+  const third = shutdown("SIGHUP", {
+    savePositions: () => {
+      order.push("savePositions-duplicate-2");
+      return true;
+    },
+    log: (ev) => order.push(`log-duplicate-2:${ev}`),
+    openCount: () => 3,
+  });
+
+  assert.equal(first, true);
+  assert.equal(second, false);
+  assert.equal(third, false);
+  assert.deepEqual(order, ["savePositions", "log:stop"]);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].signal, "SIGTERM");
+  assert.equal(events[0].persisted, true);
+  assert.equal(events[0].openPositions, 3);
+  _resetMainStateForTests(0);
 });

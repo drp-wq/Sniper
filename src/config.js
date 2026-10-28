@@ -20,7 +20,7 @@ export function parseNum(env, key, defaultVal, { min = -Infinity, max = Infinity
   if (raw === undefined || raw === null || String(raw).trim() === "") return defaultVal;
   const val = Number(raw);
   if (!Number.isFinite(val) || val < min || val > max) {
-    throw new Error(`Invalid numeric env var ${key}="${raw}" (expected finite number in [${min}, ${max}])`);
+    throw new Error(`Invalid numeric env var ${key} (expected finite number in [${min}, ${max}])`);
   }
   return val;
 }
@@ -48,6 +48,8 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
     // Pessimistic paper fills: you will not get the screen price.
     entrySlip: parseNum(env, "ENTRY_SLIP", 0.05, { min: 0, max: 0.95 }),
     exitSlip: parseNum(env, "EXIT_SLIP", 0.08, { min: 0, max: 0.95 }),
+    entryQuoteRetries: Math.floor(parseNum(env, "ENTRY_QUOTE_RETRIES", 2, { min: 0, max: 5 })),
+    entryQuoteRetryMs: parseNum(env, "ENTRY_QUOTE_RETRY_MS", 3000, { min: 100, max: 30000 }),
     gate: {
       maxTop10Pct: parseNum(env, "MAX_TOP10_PCT", 35, { min: 0.1, max: 100 }),
     },
@@ -62,7 +64,8 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
       trailArm: 50,      // arm trailing stop at +50%
       trail: 20,         // exit on 20% drawdown from peak once armed
       liqDrop: 30,       // exit if liquidity falls 30% from entry
-      noQuoteTicks: 12,  // consecutive missing quotes before counting a total loss
+      noQuoteTicks: 12,  // consecutive missing quotes before marking unresolved
+      maxUnresolvedMin: parseNum(env, "MAX_UNRESOLVED_MIN", 30, { min: 1, max: 1440 }),
     },
   };
 }

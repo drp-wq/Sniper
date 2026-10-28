@@ -93,7 +93,7 @@ export function parseJsonlText(text) {
   return { rows, malformedLines };
 }
 
-export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } = {}) {
+export function analyzeLogs(rows, { malformedLines = 0, activePositions = [], archivedPositions = [] } = {}) {
   const gates = rows.filter((r) => r && r.ev === "gate");
   const gateErrors = rows.filter((r) => r && r.ev === "gate_error");
   const gaps = rows.filter((r) => r && r.ev === "signal_gap");
@@ -102,6 +102,7 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } =
   const closed = rows.filter((r) => r && r.ev === "paper_close" && Number.isFinite(Number(r.pnl)));
   const unresolvedEvents = rows.filter((r) => r && r.ev === "paper_unresolved");
   const recoveredEvents = rows.filter((r) => r && r.ev === "paper_quote_recovered");
+  const archivedEvents = rows.filter((r) => r && r.ev === "paper_archived_unresolved");
 
   const lags = gates
     .map((g) => Number(g.lagMs ?? g.receivedAgeMs))
@@ -131,11 +132,37 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } =
   for (const r of rows) {
     if (!r || !r.mint) continue;
     if (r.ev === "paper_open") openMap.set(r.mint, r);
-    if (r.ev === "paper_close") openMap.delete(r.mint);
+    if (r.ev === "paper_close" || r.ev === "paper_archived_unresolved") openMap.delete(r.mint);
   }
   const unresolvedActive = activePositions.length
     ? activePositions
     : [...openMap.values()];
+
+  const archivedList = archivedEvents.length ? archivedEvents : archivedPositions;
+  const archivedUnresolvedCount = archivedList.length;
+
+  // Separate worst-case stress estimate if archived unresolved positions lost 100% of their remaining unclosed weight
+  const stressedArchPnls = archivedList.map((a) => {
+    const banked = Number.isFinite(Number(a?.realizedBankedPct ?? a?.realized))
+      ? Number(a.realizedBankedPct ?? a.realized)
+      : 0;
+    const remWeight = a?.tookHalf ? 0.5 : 1.0;
+    return Number((banked + remWeight * -100).toFixed(2));
+  });
+  const combinedStressedPnls = [...chronPnls, ...stressedArchPnls];
+  const stressedMeanPnl = combinedStressedPnls.length
+    ? Number(mean(combinedStressedPnls).toFixed(2))
+    : null;
+  const stressedMedianPnl = combinedStressedPnls.length
+    ? Number(median(combinedStressedPnls).toFixed(2))
+    : null;
+
+  const totalCompletedOrArchived = closed.length + archivedUnresolvedCount;
+  const archivedSharePct =
+    totalCompletedOrArchived > 0
+      ? Number(((archivedUnresolvedCount / totalCompletedOrArchived) * 100).toFixed(1))
+      : 0;
+  const archivedBiasWarning = archivedSharePct > 5;
 
   const dd = computeDrawdown(chronPnls, 0.1);
   const meanPnl = Number(mean(sortedPnls).toFixed(2));
@@ -144,6 +171,7 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } =
   const medianPnl2x = Number(median(pnls2x).toFixed(2));
 
   const minTradesTarget = 200;
+  // Archived positions are strictly excluded from the 200-closed-trade target
   const sampleAdequate = closed.length >= minTradesTarget;
   const passesEvalGate =
     sampleAdequate &&
@@ -166,6 +194,11 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } =
     unresolvedOpenCount: unresolvedActive.length,
     unresolvedMissingQuoteEvents: unresolvedEvents.length,
     quoteRecoveredEvents: recoveredEvents.length,
+    archivedUnresolvedCount,
+    archivedSharePct,
+    archivedBiasWarning,
+    stressedMeanPnl,
+    stressedMedianPnl,
     winRatePct: sortedPnls.length
       ? Number(((sortedPnls.filter((x) => x > 0).length / sortedPnls.length) * 100).toFixed(1))
       : 0,
@@ -182,6 +215,7 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [] } =
       minTradesTarget,
       sampleAdequate,
       passesEvalGate,
+      archivedBiasWarning,
     },
   };
 }
@@ -200,11 +234,21 @@ export function formatReport(summary) {
     );
   }
   lines.push(
-    `Positions opened: ${summary.openedCount}  Closed trades: ${summary.closedCount}  Unresolved/open: ${summary.unresolvedOpenCount}`,
+    `Positions opened: ${summary.openedCount}  Closed trades: ${summary.closedCount}  Unresolved/open: ${summary.unresolvedOpenCount}  Archived unresolved: ${summary.archivedUnresolvedCount}`,
   );
-  if (summary.unresolvedMissingQuoteEvents > 0 || summary.quoteRecoveredEvents > 0) {
+  if (summary.unresolvedMissingQuoteEvents > 0 || summary.quoteRecoveredEvents > 0 || summary.archivedUnresolvedCount > 0) {
     lines.push(
-      `Missing-quote unresolved events: ${summary.unresolvedMissingQuoteEvents}  recovered: ${summary.quoteRecoveredEvents}`,
+      `Missing-quote events -> unresolved: ${summary.unresolvedMissingQuoteEvents}  recovered: ${summary.quoteRecoveredEvents}  archived: ${summary.archivedUnresolvedCount} (${summary.archivedSharePct}% of completed/archived)`,
+    );
+  }
+  if (summary.archivedUnresolvedCount > 0 && summary.stressedMeanPnl !== null) {
+    lines.push(
+      `Worst-case unresolved stress estimate (if archived lost remaining weight): Mean ${summary.stressedMeanPnl.toFixed(2)}%  Median ${summary.stressedMedianPnl.toFixed(2)}%`,
+    );
+  }
+  if (summary.archivedBiasWarning) {
+    lines.push(
+      `Bias warning: archived unresolved positions exceed 5% (${summary.archivedSharePct}%) of completed/archived outcomes.`,
     );
   }
   if (summary.malformedLines > 0) {
@@ -248,14 +292,16 @@ if (isDirectRun) {
   }
   const { rows, malformedLines } = parseJsonlText(readFileSync(file, "utf8"));
   let activePositions = [];
+  let archivedPositions = [];
   if (existsSync("logs/positions.json")) {
     try {
       const parsed = JSON.parse(readFileSync("logs/positions.json", "utf8"));
       if (Array.isArray(parsed?.positions)) activePositions = parsed.positions;
+      if (Array.isArray(parsed?.archivedUnresolved)) archivedPositions = parsed.archivedUnresolved;
     } catch {
       /* ignore corrupt positions file in report */
     }
   }
-  const summary = analyzeLogs(rows, { malformedLines, activePositions });
+  const summary = analyzeLogs(rows, { malformedLines, activePositions, archivedPositions });
   console.log(formatReport(summary));
 }

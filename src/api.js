@@ -1,14 +1,31 @@
 import { cfg } from "./config.js";
+import { redactSecrets } from "./rpc.js";
 
 const headers = { "x-key": cfg.appKey, "content-type": "application/json" };
 
-export async function getSignals(since) {
-  const r = await fetch(`${cfg.workerUrl}/signals?since=${since}`, {
-    headers,
-    signal: AbortSignal.timeout(8000),
-  });
+export async function getSignals(since, deps = {}) {
+  const fetchFn = deps.fetch ?? fetch;
+  const workerUrl = deps.workerUrl ?? cfg.workerUrl;
+  const extraSecrets = [workerUrl, cfg.appKey];
+
+  let r;
+  try {
+    r = await fetchFn(`${workerUrl}/signals?since=${since}`, {
+      headers,
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (e) {
+    const rawMsg = e?.cause?.message ? `${e.message} (${e.cause.message})` : (e?.message || String(e));
+    throw new Error(`signals network error: ${redactSecrets(rawMsg, extraSecrets)}`);
+  }
+
   if (!r.ok) throw new Error(`signals HTTP ${r.status}`);
-  return r.json();
+
+  try {
+    return await r.json();
+  } catch {
+    throw new Error("signals malformed JSON");
+  }
 }
 
 export const notify = (text) =>
