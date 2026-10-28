@@ -44,6 +44,29 @@ test("selectPair prefers entry pairAddress when still valid and flags fallback w
   const switched = selectPair(pairs, "pair-missing");
   assert.equal(switched.pair, "pair-B");
   assert.equal(switched.pairSwitched, true);
+
+  // When baseToken.address is present and target mint is passed, inverted pairs where target mint is quoteToken are rejected
+  const mixedBaseQuotePairs = [
+    {
+      chainId: "solana",
+      pairAddress: "pair-inverted-higher-liq",
+      baseToken: { address: "So11111111111111111111111111111111111111112" },
+      quoteToken: { address: "mint-target" },
+      priceUsd: "185.00",
+      liquidity: { usd: 90000 },
+    },
+    {
+      chainId: "solana",
+      pairAddress: "pair-direct-base",
+      baseToken: { address: "mint-target" },
+      quoteToken: { address: "So11111111111111111111111111111111111111112" },
+      priceUsd: "0.0042",
+      liquidity: { usd: 25000 },
+    },
+  ];
+  const filtered = selectPair(mixedBaseQuotePairs, null, { mint: "mint-target" });
+  assert.equal(filtered.pair, "pair-direct-base");
+  assert.equal(filtered.price, 0.0042);
 });
 
 test("missing quotes do not fabricate a -100% total loss, reset missingSince on recovery, and can close cleanly", async () => {

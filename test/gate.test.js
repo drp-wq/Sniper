@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runGate } from "../src/gate.js";
+import { runGate, inspectMintExtensions } from "../src/gate.js";
 import { rpc, redactSecrets } from "../src/rpc.js";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
@@ -215,4 +215,115 @@ test("rpc retries transient HTTP 429 and network errors up to rpcRetries and suc
 
   assert.equal(attempts, 3);
   assert.deepEqual(res, { value: [{ address: "ta-1", uiAmount: 42 }] });
+});
+
+test("runGate and inspectMintExtensions reject dangerous Token-2022 extensions and uninitialized mints while allowing benign metadata extensions", async () => {
+  const dangerousReasons = inspectMintExtensions({
+    decimals: 6,
+    isInitialized: false,
+    extensions: [
+      { extension: "permanentDelegate", state: { delegate: "DelegatePubkey111" } },
+      { extension: "transferHook", state: { programId: "HookProg111", authority: null } },
+      {
+        extension: "transferFeeConfig",
+        state: {
+          olderTransferFee: { transferFeeBasisPoints: 0 },
+          newerTransferFee: { transferFeeBasisPoints: 500 },
+        },
+      },
+      { extension: "defaultAccountState", state: { state: "frozen" } },
+      { extension: "nonTransferable", state: {} },
+      { extension: "mintCloseAuthority", state: { closeAuthority: "CloseAuth111" } },
+      { extension: "pausableConfig", state: { authority: "PauseAuth111", paused: false } },
+    ],
+  });
+
+  assert.deepEqual(dangerousReasons, [
+    "mint not initialized",
+    "permanent delegate active",
+    "transfer hook active",
+    "transfer fee active",
+    "default account state frozen",
+    "non-transferable mint",
+    "mint close authority active",
+    "pausable mint active",
+  ]);
+
+  // Verify runGate fails closed when Token-2022 transferHook / permanentDelegate are active even if mintAuthority & freezeAuthority are null
+  const gateFail = await runGate(
+    "mint-token2022-hook",
+    { maxTop10Pct: 35 },
+    {
+      rpc: async (method) => {
+        if (method === "getAccountInfo") {
+          return {
+            value: {
+              data: {
+                parsed: {
+                  info: {
+                    decimals: 9,
+                    isInitialized: true,
+                    mintAuthority: null,
+                    freezeAuthority: null,
+                    extensions: [
+                      { extension: "transferHook", state: { programId: "HoneypotHookProgram111" } },
+                    ],
+                  },
+                },
+              },
+            },
+          };
+        }
+        if (method === "getTokenSupply") return { value: { uiAmount: 1000 } };
+        if (method === "getTokenLargestAccounts") return { value: [] };
+        return { value: [] };
+      },
+    },
+  );
+  assert.equal(gateFail.pass, false);
+  assert.ok(gateFail.reasons.includes("transfer hook active"));
+
+  // Verify benign extensions (metadataPointer, tokenMetadata, zero-fee revoked transferFeeConfig) pass
+  const gatePass = await runGate(
+    "mint-token2022-benign",
+    { maxTop10Pct: 35 },
+    {
+      rpc: async (method) => {
+        if (method === "getAccountInfo") {
+          return {
+            value: {
+              data: {
+                parsed: {
+                  info: {
+                    decimals: 9,
+                    isInitialized: true,
+                    mintAuthority: null,
+                    freezeAuthority: null,
+                    extensions: [
+                      { extension: "metadataPointer", state: { metadataAddress: "Meta111" } },
+                      { extension: "tokenMetadata", state: { name: "Safe", symbol: "SAFE" } },
+                      {
+                        extension: "transferFeeConfig",
+                        state: {
+                          transferFeeConfigAuthority: null,
+                          withdrawWithheldAuthority: null,
+                          olderTransferFee: { transferFeeBasisPoints: 0 },
+                          newerTransferFee: { transferFeeBasisPoints: 0 },
+                        },
+                      },
+                    ],
+                  },
+                },
+              },
+            },
+          };
+        }
+        if (method === "getTokenSupply") return { value: { uiAmount: 1000 } };
+        if (method === "getTokenLargestAccounts") return { value: [] };
+        return { value: [] };
+      },
+    },
+  );
+  assert.equal(gatePass.pass, true);
+  assert.deepEqual(gatePass.reasons, []);
 });

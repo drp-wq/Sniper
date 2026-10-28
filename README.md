@@ -1,6 +1,6 @@
 # sniper-bot (paper phase)
 
-Zero-dependency Node (>=18) scanner + paper trader. No keys, no signing, no real trades.
+Zero-dependency Node (>=22.13.0) scanner + paper trader. No keys, no signing, no real trades.
 
 Flow: Helius webhook -> Cloudflare Worker (KV) -> phone polls -> gate -> paper position -> exit rules -> logs/paper.jsonl
 

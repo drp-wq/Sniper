@@ -2,10 +2,70 @@ import { rpc } from "./rpc.js";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 
+function hasNonEmptyAuthority(val) {
+  return typeof val === "string" && val.trim().length > 0;
+}
+
+// Inspect parsed SPL / Token-2022 mint info for dangerous extensions that can freeze,
+// tax, seize, or block transfers even when mintAuthority and freezeAuthority are null.
+export function inspectMintExtensions(info) {
+  const reasons = [];
+  if (!info || typeof info !== "object") return reasons;
+
+  if (info.isInitialized === false) {
+    reasons.push("mint not initialized");
+  }
+
+  const extensions = Array.isArray(info.extensions) ? info.extensions : [];
+  for (const ext of extensions) {
+    const name = typeof ext?.extension === "string" ? ext.extension.trim() : "";
+    const state = ext?.state && typeof ext.state === "object" ? ext.state : {};
+
+    if (name === "permanentDelegate" && hasNonEmptyAuthority(state.delegate)) {
+      reasons.push("permanent delegate active");
+    } else if (
+      name === "transferHook" &&
+      (hasNonEmptyAuthority(state.programId) || hasNonEmptyAuthority(state.authority))
+    ) {
+      reasons.push("transfer hook active");
+    } else if (name === "transferFeeConfig") {
+      const olderBps = Number(state?.olderTransferFee?.transferFeeBasisPoints ?? 0);
+      const newerBps = Number(state?.newerTransferFee?.transferFeeBasisPoints ?? 0);
+      if (
+        (Number.isFinite(olderBps) && olderBps > 0) ||
+        (Number.isFinite(newerBps) && newerBps > 0) ||
+        hasNonEmptyAuthority(state.transferFeeConfigAuthority) ||
+        hasNonEmptyAuthority(state.withdrawWithheldAuthority)
+      ) {
+        reasons.push("transfer fee active");
+      }
+    } else if (name === "defaultAccountState") {
+      const acctState = String(state.state ?? state.accountState ?? "").trim().toLowerCase();
+      if (acctState === "frozen") {
+        reasons.push("default account state frozen");
+      }
+    } else if (name === "nonTransferable") {
+      reasons.push("non-transferable mint");
+    } else if (
+      (name === "mintCloseAuthority" || name === "closeAuthority") &&
+      hasNonEmptyAuthority(state.closeAuthority)
+    ) {
+      reasons.push("mint close authority active");
+    } else if (
+      (name === "pausable" || name === "pausableConfig") &&
+      (Boolean(state.paused) || hasNonEmptyAuthority(state.authority))
+    ) {
+      reasons.push("pausable mint active");
+    }
+  }
+
+  return [...new Set(reasons)];
+}
+
 // Returns { pass, reasons[], top10Pct }. Any failed check rejects the token.
-// Note: This gate only inspects on-chain mint/freeze authority and top-20 token account
-// concentration. It CANNOT detect un-burned LP tokens, off-chain wallet bundling/sybils,
-// honeypot transfer hooks, or post-entry liquidity withdrawals.
+// Note: This gate inspects on-chain mint/freeze authority, Token-2022 dangerous extensions,
+// and top-20 token account concentration. It CANNOT detect un-burned LP tokens, off-chain
+// wallet bundling/sybils, or post-entry liquidity withdrawals.
 export async function runGate(mint, gateCfg, deps = {}) {
   const rpcFn = deps.rpc ?? rpc;
   const reasons = [];
@@ -14,7 +74,7 @@ export async function runGate(mint, gateCfg, deps = {}) {
     return { pass: false, reasons: ["invalid mint address"], top10Pct: null };
   }
 
-  // 1) Authorities must be revoked.
+  // 1) Authorities must be revoked and dangerous Token-2022 extensions must be absent.
   const acc = await rpcFn("getAccountInfo", [mint, { encoding: "jsonParsed" }]);
   const info = acc?.value?.data?.parsed?.info;
   if (!info || !Number.isFinite(Number(info.decimals))) {
@@ -22,6 +82,9 @@ export async function runGate(mint, gateCfg, deps = {}) {
   }
   if (info.mintAuthority) reasons.push("mint authority not revoked");
   if (info.freezeAuthority) reasons.push("freeze authority not revoked");
+  for (const extReason of inspectMintExtensions(info)) {
+    reasons.push(extReason);
+  }
 
   // 2) Holder concentration, counting wallet-owned accounts and aggregating by owner wallet.
   //    Pool vaults / bonding curves are owned by programs (PDAs), so they are excluded.

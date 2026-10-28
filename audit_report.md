@@ -3,7 +3,7 @@
 **Repository**: `/workspaces/Sniper/Sniper` (`main` @ `edd06db6cc4f0919496d84197174e7f05dfc372d`)  
 **Cloudflare Account**: `f4f693d6251ce1deeffca0d55d1ceb65` (`Pjdebnath01@gmail.com's Account`)  
 **Target Worker**: `sniper-relay` (`https://sniper-relay.pjdebnath01.workers.dev`)  
-**Last Updated**: `2026-10-28T11:03:50Z`  
+**Last Updated**: `2026-10-28T15:36:00Z`
 **Status**: **PRODUCTION DEPLOYED & VERIFIED (`Version ID: 81088741-081d-4ddb-ac63-7d451aa6f4c6`, `migration_tag: "v1"`, `SignalQueueDO` namespace `c023214f59a84826b691477a0979cdab`, `use_sqlite: true`)**.
 
 ---
@@ -18,6 +18,7 @@
 | `2026-10-28T10:48Z–10:53Z` | Final Release Gate Audit & Pre-Deployment Operator Package | Reconfirmed live production state, `33/33` unit/regression tests (`exit 0`), Wrangler dry-run (`24.14 KiB / gzip: 5.69 KiB`, `exit 0`), paper-only safety boundary, and saved this persistent `audit_report.md` in `/workspaces/Sniper/Sniper/audit_report.md`. |
 | `2026-10-28T11:00Z` | Local Git Commit (Authorized) | Staged and committed all 10 modified files, `wrangler.toml`, and `audit_report.md` on `main` (preserving `sniper-bot.zip` and `sniper_bot_checkpoint1_step_by_step.pdf` untracked and untouched). |
 | `2026-10-28T11:02Z–11:04Z` | Production Deployment & Post-Deploy Read-Only Verification + Git Push (Authorized) | Executed pre-deploy webhook check (`0` webhooks) and KV backup (`PREDEPLOY_BACKUP_OK`); deployed `sniper-relay` (`Version ID: 81088741-081d-4ddb-ac63-7d451aa6f4c6`, `migration_tag: "v1"`, `SignalQueueDO` SQLite namespace `c023214f59a84826b691477a0979cdab`, `use_sqlite: true`); verified `401` auth guards and `POSTDEPLOY_VERIFIED_OK` (`seq: 0, oldestId: null, halt: false, hb: {ts: 1793178891285, open: 0}, alertedUntil: 1793186925000`); pushed `main` to `origin/main`. |
+| `2026-10-28T15:11Z–15:36Z` | Node.js Compatibility Fix (`>=22.13.0`), Token-2022 Gate Hardening & Base-Token Quote Validation (Authorized) | Configured user-local Node `v24.21.0` (`~/.local/bin/node`) and `/home/termiux/Sniper -> /workspaces/Sniper`; updated engine metadata to `>=22.13.0` (`package.json`, `package-lock.json`, `README.md`); added `inspectMintExtensions()` in `src/gate.js` to reject dangerous Token-2022 extensions (`permanentDelegate`, `transferHook`, `transferFeeConfig`, `defaultAccountState: frozen`, `nonTransferable`, `mintCloseAuthority`, `pausableConfig`) and uninitialized mints; hardened `selectPair()` in `src/price.js` to reject inverted DexScreener pairs where target mint is not `baseToken`; verified `34/34` unit/regression tests pass (`exit 0`). |
 
 ---
 
