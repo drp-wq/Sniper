@@ -5,30 +5,78 @@ import { notify } from "./api.js";
 
 const R = cfg.rules;
 const positions = new Map(); // mint -> position
+const opening = new Set();   // mints currently awaiting entry quote
 
 export const openCount = () => positions.size;
-export const isOpen = (mint) => positions.has(mint);
+export const isOpen = (mint) => positions.has(mint) || opening.has(mint);
 
-export async function openPaper(mint, sig) {
-  if (positions.size >= cfg.maxOpen) return log("skip_maxopen", { mint });
-  const q = await getQuote(mint);
-  if (!q) return log("skip_noquote", { mint });
-  if (q.liqUsd < cfg.minLiqUsd) return log("skip_liquidity", { mint, liqUsd: q.liqUsd });
+// Internal helper exposed for deterministic unit tests only.
+export function _resetPaperStateForTests() {
+  positions.clear();
+  opening.clear();
+}
 
-  const entry = q.price * (1 + cfg.entrySlip);
-  positions.set(mint, {
-    mint, sig, entry,
-    peak: entry,
-    openedAt: Date.now(),
-    liq0: q.liqUsd,
-    sidewaysSince: null,
-    trailArmed: false,
-    tookHalf: false,
-    realized: 0,       // pct points already banked (weighted)
-    misses: 0,
-  });
-  log("paper_open", { mint, entry, liqUsd: q.liqUsd });
-  notify(`PAPER BUY ${mint}\nentry ${entry}\nliq $${Math.round(q.liqUsd)}`);
+export async function openPaper(mint, sig, meta = {}, deps = {}) {
+  const quoteFn = deps.getQuote ?? getQuote;
+  const logFn = deps.log ?? log;
+  const notifyFn = deps.notify ?? notify;
+  const maxOpen = deps.maxOpen ?? cfg.maxOpen;
+  const minLiqUsd = deps.minLiqUsd ?? cfg.minLiqUsd;
+  const entrySlip = deps.entrySlip ?? cfg.entrySlip;
+
+  if (!mint || typeof mint !== "string") {
+    return logFn("skip_invalid_mint", { mint: String(mint ?? ""), ...meta });
+  }
+  if (positions.has(mint) || opening.has(mint)) {
+    return logFn("signal_skip", { mint, reason: "position_already_open", ...meta });
+  }
+  if (positions.size + opening.size >= maxOpen) {
+    return logFn("skip_maxopen", { mint, ...meta });
+  }
+
+  opening.add(mint);
+  try {
+    const q = await quoteFn(mint);
+    if (!q) return logFn("skip_noquote", { mint, ...meta });
+    if (q.liqUsd < minLiqUsd) {
+      return logFn("skip_liquidity", { mint, liqUsd: q.liqUsd, ...meta });
+    }
+    // Atomic post-await re-check in case another entry completed concurrently.
+    if (positions.has(mint)) {
+      return logFn("signal_skip", { mint, reason: "position_already_open", ...meta });
+    }
+    if (positions.size >= maxOpen) {
+      return logFn("skip_maxopen", { mint, ...meta });
+    }
+
+    const entry = q.price * (1 + entrySlip);
+    positions.set(mint, {
+      mint,
+      sig,
+      entry,
+      peak: entry,
+      openedAt: Date.now(),
+      liq0: q.liqUsd,
+      pair: q.pair ?? null,
+      sidewaysSince: null,
+      trailArmed: false,
+      tookHalf: false,
+      realized: 0,       // pct points already banked (weighted)
+      misses: 0,
+      ...meta,
+    });
+    logFn("paper_open", {
+      mint,
+      sig: sig || null,
+      entry,
+      liqUsd: q.liqUsd,
+      pair: q.pair ?? null,
+      ...meta,
+    });
+    notifyFn(`PAPER BUY ${mint}\nentry ${entry}\nliq $${Math.round(q.liqUsd)}`);
+  } finally {
+    opening.delete(mint);
+  }
 }
 
 // Pure rule engine. Returns null, { partial }, or { exit } with reason and pct.
