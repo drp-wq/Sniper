@@ -267,7 +267,8 @@ export function createUiHandler(deps = {}) {
     // Serve static files from app/assets
     const cleanRel = path === "/" ? "/index.html" : path;
     const candidate = resolve(assetsDir, `.${cleanRel}`);
-    if (!candidate.startsWith(assetsDir) || !existsSync(candidate)) {
+    const normalizedAssetsDir = assetsDir.endsWith("/") ? assetsDir : assetsDir + "/";
+    if ((candidate !== assetsDir && !candidate.startsWith(normalizedAssetsDir)) || !existsSync(candidate)) {
       return sendJson(res, 404, { error: "not found" });
     }
 

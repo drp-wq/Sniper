@@ -191,7 +191,14 @@ export const TabPositions: React.FC = () => {
                   {/* Card Header: Symbol, Mint, Copy, Links, Badges */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800/80 pb-3 mb-3">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-base font-bold text-white">{pos.symbol}</span>
+                      <span className="text-base font-bold text-white flex items-center gap-1.5">
+                        {pos.symbol}
+                        {pos.simulated && (
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                            SIMULATED
+                          </span>
+                        )}
+                      </span>
                       <span className="text-xs text-zinc-400 truncate max-w-[120px] sm:max-w-none">
                         {pos.name}
                       </span>
@@ -375,7 +382,14 @@ export const TabPositions: React.FC = () => {
                       return (
                         <tr key={trade.id} className="hover:bg-zinc-900/40">
                           <td className="py-2.5 px-3">
-                            <div className="font-bold text-white">{trade.symbol}</div>
+                            <div className="font-bold text-white flex items-center gap-1.5">
+                              {trade.symbol}
+                              {trade.simulated && (
+                                <span className="text-[9px] font-mono px-1 py-0.2 rounded bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                                  SIM
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-zinc-500">
                               {trade.mint.slice(0, 4)}...{trade.mint.slice(-4)}
                             </div>

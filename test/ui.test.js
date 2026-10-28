@@ -256,6 +256,10 @@ test("UI server serves mobile command center HTML, APK download, and secret-safe
       }),
     });
     assert.equal(httpWorkerTargetRes.status, 403);
+
+    // 7f) Path traversal outside assetsDir -> 404
+    const traversalRes = await fetch(`${baseUrl}/../package.json`);
+    assert.equal(traversalRes.status, 404);
   } finally {
     await close();
   }

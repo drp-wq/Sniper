@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Mock localStorage for Node.js test environment before importing dashboard engine
 const mockStorage = new Map();
@@ -11,6 +14,7 @@ globalThis.localStorage = {
 };
 
 import { computeDoubleSlipPnl } from "../src/paper.js";
+import { runGate as cliRunGate, inspectMintExtensions as cliInspectExtensions } from "../src/gate.js";
 import { SolanaRpc } from "../dashboard/src/services/solanaRpc.ts";
 import { DexScreenerService } from "../dashboard/src/services/dexScreener.ts";
 import { SniperEngine } from "../dashboard/src/services/engine.ts";
@@ -480,4 +484,72 @@ test("F3 tickPrices race: position entered mid-await survives, and position manu
   } finally {
     DexScreenerService.getQuote = origGetQuote;
   }
+});
+
+test("CLI gate rejects unknown Token-2022 extensions and unparseable holder owners", async () => {
+  // 1) Unknown extension rejection in inspectMintExtensions
+  const reasons = cliInspectExtensions({
+    isInitialized: true,
+    extensions: [{ extension: "maliciousHiddenDrainer" }],
+  });
+  assert.ok(reasons.some((r) => r.includes("unknown/unhandled extension")));
+
+  // 2) Unparseable holder owner fails closed
+  const gateRes = await cliRunGate(
+    "mint-unparseable-owner",
+    { maxTop10Pct: 35 },
+    {
+      rpc: async (method) => {
+        if (method === "getAccountInfo") {
+          return {
+            value: {
+              data: {
+                parsed: {
+                  info: {
+                    decimals: 6,
+                    mintAuthority: null,
+                    freezeAuthority: null,
+                    isInitialized: true,
+                  },
+                },
+              },
+            },
+          };
+        }
+        if (method === "getTokenSupply") return { value: { uiAmount: 1000 } };
+        if (method === "getTokenLargestAccounts") {
+          return { value: [{ address: "holder1" }, { address: "holder2" }] };
+        }
+        if (method === "getMultipleAccounts") {
+          return {
+            value: [
+              { data: { parsed: { info: { owner: "valid-owner" } } } },
+              { data: { parsed: { info: { owner: null } } } }, // unparseable owner
+            ],
+          };
+        }
+        return { value: [] };
+      },
+    }
+  );
+  assert.equal(gateRes.pass, false);
+  assert.ok(gateRes.reasons.includes("unparseable holder owner"));
+});
+
+test("Android MainActivity enforces sealed WebView sandbox and blocks remote subresources", () => {
+  const currentDir = dirname(fileURLToPath(import.meta.url));
+  const mainActivityPath = resolve(currentDir, "../app/android/src/com/sniper/paperbot/MainActivity.java");
+  const javaCode = readFileSync(mainActivityPath, "utf8");
+
+  // Verify shouldInterceptRequest blocks remote subresources with 403
+  assert.ok(javaCode.includes("shouldInterceptRequest(WebView view, WebResourceRequest request)"));
+  assert.ok(javaCode.includes("url.startsWith(\"file:///android_asset/\")"));
+  assert.ok(javaCode.includes("new WebResourceResponse(\"text/plain\", \"UTF-8\", 403"));
+
+  // Verify WebSettings security hardening flags
+  assert.ok(javaCode.includes("settings.setAllowFileAccess(false)"));
+  assert.ok(javaCode.includes("settings.setAllowContentAccess(false)"));
+  assert.ok(javaCode.includes("settings.setAllowFileAccessFromFileURLs(false)"));
+  assert.ok(javaCode.includes("settings.setAllowUniversalAccessFromFileURLs(false)"));
+  assert.ok(javaCode.includes("settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW)"));
 });

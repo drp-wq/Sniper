@@ -2,6 +2,25 @@ import { rpc } from "./rpc.js";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 
+const KNOWN_HANDLED_EXTENSIONS = new Set([
+  "permanentDelegate",
+  "transferHook",
+  "transferFeeConfig",
+  "defaultAccountState",
+  "nonTransferable",
+  "mintCloseAuthority",
+  "closeAuthority",
+  "pausable",
+  "pausableConfig",
+  "metadataPointer",
+  "tokenMetadata",
+  "groupPointer",
+  "groupMemberPointer",
+  "tokenGroup",
+  "tokenGroupMember",
+  "interestBearingConfig",
+]);
+
 function hasNonEmptyAuthority(val) {
   return typeof val === "string" && val.trim().length > 0;
 }
@@ -20,6 +39,11 @@ export function inspectMintExtensions(info) {
   for (const ext of extensions) {
     const name = typeof ext?.extension === "string" ? ext.extension.trim() : "";
     const state = ext?.state && typeof ext.state === "object" ? ext.state : {};
+
+    if (!KNOWN_HANDLED_EXTENSIONS.has(name)) {
+      reasons.push(`Token-2022 unknown/unhandled extension: ${name}`);
+      continue;
+    }
 
     if (name === "permanentDelegate" && hasNonEmptyAuthority(state.delegate)) {
       reasons.push("permanent delegate active");
@@ -101,6 +125,10 @@ export async function runGate(mint, gateCfg, deps = {}) {
     ? (await rpcFn("getMultipleAccounts", [largest.map((a) => a.address), jp]))?.value ?? []
     : [];
   const owners = tokenAccs.map((a) => a?.data?.parsed?.info?.owner ?? null);
+  if (largest.length > 0 && (owners.length === 0 || owners.some((o) => !o))) {
+    reasons.push("unparseable holder owner");
+    return { pass: false, reasons, top10Pct: 100 };
+  }
   const ownerKeys = [...new Set(owners.filter(Boolean))];
   const noData = { encoding: "base64", dataSlice: { offset: 0, length: 0 } };
   const ownerInfo = ownerKeys.length

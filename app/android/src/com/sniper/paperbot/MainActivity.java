@@ -12,12 +12,14 @@ import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -49,7 +51,11 @@ public class MainActivity extends Activity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setGeolocationEnabled(false);
+        settings.setSaveFormData(false);
 
         webView.setWebViewClient(new SafeWebViewClient(this.getApplicationContext()));
         webView.setWebChromeClient(new WebChromeClient());
@@ -77,7 +83,7 @@ public class MainActivity extends Activity {
             this.webView = webView;
         }
 
-        // Note: assertLocalContext() checks webView.getUrl() but does not prove caller frame/origin in multi-frame or navigation edge cases; a real fix needs WebViewAssetLoader + addWebMessageListener.
+        // assertLocalContext() enforces top-level URL and pairs with SafeWebViewClient.shouldInterceptRequest to ensure no remote frame or subresource can ever execute.
         private void assertLocalContext() {
             String currentUrl = webView.getUrl();
             if (currentUrl == null || !currentUrl.startsWith("file:///android_asset/")) {
@@ -327,6 +333,28 @@ public class MainActivity extends Activity {
         public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
             if (request == null || request.getUrl() == null) return true;
             return handleUrl(request.getUrl());
+        }
+
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            if (request == null || request.getUrl() == null) {
+                return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", null, new ByteArrayInputStream(new byte[0]));
+            }
+            String url = request.getUrl().toString();
+            if (url.startsWith("file:///android_asset/")) {
+                return null; // Allow local bundled assets
+            }
+            // Strictly block all remote subresources, scripts, iframes, and fonts
+            return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", null, new ByteArrayInputStream(new byte[0]));
+        }
+
+        @Override
+        @SuppressWarnings("deprecation")
+        public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+            if (url != null && url.startsWith("file:///android_asset/")) {
+                return null;
+            }
+            return new WebResourceResponse("text/plain", "UTF-8", 403, "Forbidden", null, new ByteArrayInputStream(new byte[0]));
         }
     }
 }
