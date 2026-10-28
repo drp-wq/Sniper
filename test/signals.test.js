@@ -60,10 +60,10 @@ test("openPaper enforces MAX_OPEN atomically across concurrent entry attempts", 
 
   // Launch 4 concurrent openPaper calls with maxOpen = 2 and duplicate mint-1
   await Promise.all([
-    openPaper("mint-1", "sig-1a", { signalId: 1 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05 }),
-    openPaper("mint-1", "sig-1b", { signalId: 2 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05 }),
-    openPaper("mint-2", "sig-2", { signalId: 3 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05 }),
-    openPaper("mint-3", "sig-3", { signalId: 4 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05 }),
+    openPaper("mint-1", "sig-1a", { signalId: 1 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05, stateFile: null }),
+    openPaper("mint-1", "sig-1b", { signalId: 2 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05, stateFile: null }),
+    openPaper("mint-2", "sig-2", { signalId: 3 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05, stateFile: null }),
+    openPaper("mint-3", "sig-3", { signalId: 4 }, { getQuote: slowQuote, log: logFn, notify: notifyFn, maxOpen: 2, minLiqUsd: 15000, entrySlip: 0.05, stateFile: null }),
   ]);
 
   assert.equal(openCount(), 2);

@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { cfg } from "./config.js";
 import { getSignals, heartbeat, notify } from "./api.js";
 import { runGate } from "./gate.js";
-import { openPaper, tick, openCount, isOpen } from "./paper.js";
+import { openPaper, tick, openCount, isOpen, loadPositions, savePositions } from "./paper.js";
 import { log } from "./log.js";
 import { signalAgeMs, signalKey, sequenceGap } from "./signals.js";
 
@@ -248,14 +248,16 @@ async function pollLoop() {
 }
 
 export function startBot() {
+  const restored = loadPositions();
   log("start", {
     pollMs: cfg.pollMs,
     paperOnly: true,
     startupBacklog: "inspect_retained_queue",
     maxSignalAgeMs: cfg.maxSignalAgeMs,
+    restoredPositions: restored,
   });
 
-  notify("Bot started (paper mode)");
+  notify(`Bot started (paper mode, restored=${restored})`);
   pollLoop();
 
   setInterval(
@@ -267,7 +269,8 @@ export function startBot() {
   heartbeat(openCount());
 
   process.on("SIGINT", () => {
-    log("stop", {});
+    savePositions();
+    log("stop", { openPositions: openCount() });
     process.exit(0);
   });
 }
