@@ -95,6 +95,17 @@ test("UI server serves mobile command center HTML, APK download, and secret-safe
     assert.equal(proxyRpcJson.ok, true);
     assert.equal(proxyRpcJson.data.result, 299999123);
 
+    // 4b) /api/proxy rejects non-POST RPC requests with 403
+    const proxyRpcGet = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "__SERVER_ENV_RPC_URL__",
+        method: "GET",
+      }),
+    });
+    assert.equal(proxyRpcGet.status, 403);
+
     // 5) /api/proxy redacts secrets on upstream errors
     const proxyErr = await fetch(`${baseUrl}/api/proxy`, {
       method: "POST",

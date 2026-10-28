@@ -79,14 +79,32 @@ async function startServer() {
       return;
     }
 
-    // Route-specific method and destination validation: DexScreener, Worker origin, or RPC
-    const configuredWorkerHost = process.env.WORKER_URL ? new URL(process.env.WORKER_URL).hostname.toLowerCase() : null;
-    const isDex = host === 'api.dexscreener.com' && parsed.pathname.startsWith('/latest/dex/tokens/') && req.method === 'GET';
-    const isWorker = configuredWorkerHost ? (host === configuredWorkerHost) : host.endsWith('.workers.dev');
-    const isWorkerRead = isWorker && (parsed.pathname === '/signals' || parsed.pathname === '/export-kv') && req.method === 'GET';
-    const isWorkerMutation = isWorker && (parsed.pathname === '/heartbeat' || parsed.pathname === '/halt' || parsed.pathname === '/notify') && req.method === 'POST';
-    const isRpc = (host === 'api.mainnet-beta.solana.com' || host.endsWith('.helius-rpc.com') || host.endsWith('.quiknode.pro')) &&
-      req.method === 'POST';
+    // Route-specific method and exact-origin destination validation
+    let configuredWorkerOrigin: string | null = null;
+    try {
+      if (process.env.WORKER_URL) {
+        const wUrl = new URL(process.env.WORKER_URL);
+        if (wUrl.protocol === 'https:' && !wUrl.username && !wUrl.password) {
+          configuredWorkerOrigin = wUrl.origin;
+        }
+      }
+    } catch {}
+
+    let configuredRpcOrigin = 'https://api.mainnet-beta.solana.com';
+    try {
+      if (process.env.RPC_URL) {
+        const rUrl = new URL(process.env.RPC_URL);
+        if (rUrl.protocol === 'https:' && !rUrl.username && !rUrl.password) {
+          configuredRpcOrigin = rUrl.origin;
+        }
+      }
+    } catch {}
+
+    const isDex = parsed.origin === 'https://api.dexscreener.com' && parsed.pathname.startsWith('/latest/dex/tokens/') && req.method === 'GET';
+    const isWorkerOrigin = configuredWorkerOrigin !== null && parsed.origin === configuredWorkerOrigin;
+    const isWorkerRead = isWorkerOrigin && (parsed.pathname === '/signals' || parsed.pathname === '/export-kv') && req.method === 'GET';
+    const isWorkerMutation = isWorkerOrigin && (parsed.pathname === '/heartbeat' || parsed.pathname === '/halt' || parsed.pathname === '/notify') && req.method === 'POST';
+    const isRpc = parsed.origin === configuredRpcOrigin && req.method === 'POST';
 
     if (!isDex && !isWorkerRead && !isWorkerMutation && !isRpc) {
       res.status(403).json({ error: 'Target destination, method, or path is not permitted' });
@@ -127,8 +145,8 @@ async function startServer() {
         res.send(text);
       }
     } catch (err: any) {
-      console.error('[Proxy Error]:', err.message);
-      res.status(502).json({ error: 'Proxy request failed', details: err.message });
+      console.error('[Proxy Error]: upstream request failed');
+      res.status(502).json({ error: 'Proxy request failed' });
     }
   });
 

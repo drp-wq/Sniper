@@ -11,6 +11,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -50,24 +51,7 @@ public class MainActivity extends Activity {
         settings.setAllowContentAccess(false);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
 
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, String url) {
-                if (url == null) return true;
-                if (url.startsWith("file:///android_asset/")) {
-                    return false;
-                }
-                Uri uri = Uri.parse(url);
-                if ("https".equalsIgnoreCase(uri.getScheme())) {
-                    try {
-                        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-                        startActivity(intent);
-                    } catch (Exception ignored) {}
-                    return true;
-                }
-                return true;
-            }
-        });
+        webView.setWebViewClient(new SafeWebViewClient(this.getApplicationContext()));
         webView.setWebChromeClient(new WebChromeClient());
         webView.addJavascriptInterface(new AndroidBridge(this, webView), "AndroidBridge");
 
@@ -140,12 +124,30 @@ public class MainActivity extends Activity {
                 if (url.getUserInfo() != null) {
                     throw new SecurityException("URL credentials not permitted");
                 }
+                int port = url.getPort();
+                if (port != -1 && port != 443) {
+                    throw new SecurityException("Non-standard HTTPS port not permitted: " + port);
+                }
                 String host = url.getHost() != null ? url.getHost().toLowerCase() : "";
+
+                // Dynamically resolve configured Worker and RPC hosts from local SharedPreferences
+                String configuredWorkerHost = "";
+                String configuredRpcHost = "api.mainnet-beta.solana.com";
+                try {
+                    SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                    String rawCfg = prefs.getString(KEY_CFG, "");
+                    if (!rawCfg.isEmpty()) {
+                        JSONObject cfg = new JSONObject(rawCfg);
+                        String wUrl = cfg.optString("workerUrl", "");
+                        String rUrl = cfg.optString("rpcUrl", "");
+                        if (!wUrl.isEmpty()) configuredWorkerHost = new URL(wUrl).getHost().toLowerCase();
+                        if (!rUrl.isEmpty()) configuredRpcHost = new URL(rUrl).getHost().toLowerCase();
+                    }
+                } catch (Exception ignored) {}
+
                 boolean allowedHost = host.equals("api.dexscreener.com") ||
-                        host.endsWith(".workers.dev") ||
-                        host.endsWith(".helius-rpc.com") ||
-                        host.endsWith(".quiknode.pro") ||
-                        host.equals("api.mainnet-beta.solana.com");
+                        (!configuredWorkerHost.isEmpty() && host.equals(configuredWorkerHost)) ||
+                        host.equals(configuredRpcHost);
                 if (!allowedHost) {
                     throw new SecurityException("Target host not permitted: " + host);
                 }
@@ -223,6 +225,43 @@ public class MainActivity extends Activity {
                     conn.disconnect();
                 }
             }
+        }
+    }
+
+    private static class SafeWebViewClient extends WebViewClient {
+        private final Context appContext;
+
+        SafeWebViewClient(Context context) {
+            this.appContext = context;
+        }
+
+        private boolean handleUrl(Uri uri) {
+            if (uri == null) return true;
+            String url = uri.toString();
+            if (url.startsWith("file:///android_asset/")) {
+                return false;
+            }
+            if ("https".equalsIgnoreCase(uri.getScheme())) {
+                try {
+                    Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    appContext.startActivity(intent);
+                } catch (Exception ignored) {}
+                return true;
+            }
+            return true;
+        }
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, String url) {
+            if (url == null) return true;
+            return handleUrl(Uri.parse(url));
+        }
+
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            if (request == null || request.getUrl() == null) return true;
+            return handleUrl(request.getUrl());
         }
     }
 }

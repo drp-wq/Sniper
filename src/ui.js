@@ -96,7 +96,7 @@ export function createUiHandler(deps = {}) {
       if (isWorkerRead || isWorkerMutation) {
         return { parsed: u, type: "worker" };
       }
-      if (isRpcOrigin) {
+      if (isRpcOrigin && method === "POST") {
         return { parsed: u, type: "rpc" };
       }
       if (isDexOrigin && u.pathname.startsWith("/latest/dex/tokens/") && method === "GET") {
