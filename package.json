@@ -7,6 +7,7 @@
     "start": "node src/main.js",
     "report": "node src/report.js",
     "ui": "node src/ui.js",
+    "build:dashboard": "bash scripts/build-dashboard.sh",
     "build:apk": "bash scripts/build-apk.sh",
     "test": "node --test"
   }

@@ -1,6 +1,7 @@
 .env
 logs/
 node_modules/
+dist/
 HALT
 *.key
 keystore*

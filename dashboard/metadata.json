@@ -1,0 +1,6 @@
+{
+  "name": "Solana Sniper Bot (Paper-Only)",
+  "description": "Paper-only Solana scanner and algorithmic paper trader with real-time token safety gates, DexScreener quotes, and 2x slippage stress testing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
