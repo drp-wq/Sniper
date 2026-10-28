@@ -9,13 +9,83 @@ const R = cfg.rules;
 const positions = new Map(); // mint -> position
 const opening = new Set();   // mints currently awaiting entry quote
 const archivedUnresolved = []; // archived positions after prolonged missing quotes
+let consumerSince = 0;       // persisted sequence cursor
+let consumerEpoch = 0;       // incremented whenever loadPositions reloads consumer state from disk
+const processedSignals = new Set(); // bounded deduplication keys persisted across restarts
 const MAX_ARCHIVED_HISTORY = 500;
+const MAX_PROCESSED_SIGNALS = 500;
 const DEFAULT_STATE_FILE = "logs/positions.json";
 
 export const openCount = () => positions.size;
 export const isOpen = (mint) => positions.has(mint) || opening.has(mint);
 export const getOpenPositions = () => [...positions.values()].map((p) => ({ ...p }));
 export const getArchivedPositions = () => archivedUnresolved.map((p) => ({ ...p }));
+export const getConsumerState = () => ({
+  since: consumerSince,
+  seenKeys: [...processedSignals],
+  epoch: consumerEpoch,
+});
+export const isSignalProcessed = (key) =>
+  typeof key === "string" && key.trim().length > 0 && processedSignals.has(key.trim());
+
+export function markSignalProcessed(key) {
+  if (typeof key !== "string" || !key.trim()) return;
+  const clean = key.trim();
+  if (processedSignals.has(clean)) {
+    processedSignals.delete(clean);
+  }
+  processedSignals.add(clean);
+  while (processedSignals.size > MAX_PROCESSED_SIGNALS) {
+    const oldest = processedSignals.values().next().value;
+    if (oldest === undefined) break;
+    processedSignals.delete(oldest);
+  }
+}
+
+function recordPositionSignalKeys(mint, sig, meta = {}) {
+  const cleanMint = typeof mint === "string" ? mint.trim() : "";
+  const cleanSig = typeof sig === "string" ? sig.trim() : "";
+  if (typeof meta?.signalKey === "string" && meta.signalKey.trim()) {
+    markSignalProcessed(meta.signalKey.trim());
+  }
+  if (cleanSig && cleanMint) {
+    markSignalProcessed(`${cleanSig}:${cleanMint}`);
+  }
+  if (meta?.signalId !== undefined && meta?.signalId !== null && cleanMint) {
+    markSignalProcessed(`queue:${meta.signalId}:${cleanMint}`);
+  }
+}
+
+function hasProcessedPositionSignal(mint, sig, meta = {}) {
+  const cleanMint = typeof mint === "string" ? mint.trim() : "";
+  const cleanSig = typeof sig === "string" ? sig.trim() : "";
+  if (typeof meta?.signalKey === "string" && isSignalProcessed(meta.signalKey)) return true;
+  if (cleanSig && cleanMint && isSignalProcessed(`${cleanSig}:${cleanMint}`)) return true;
+  if (
+    !cleanSig &&
+    meta?.signalId !== undefined &&
+    meta?.signalId !== null &&
+    cleanMint &&
+    isSignalProcessed(`queue:${meta.signalId}:${cleanMint}`)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+export function setConsumerState({ since, seenKeys, reset = false } = {}) {
+  if (reset) {
+    consumerSince = Number.isFinite(Number(since)) && Number(since) >= 0 ? Math.floor(Number(since)) : 0;
+    processedSignals.clear();
+  } else if (Number.isFinite(Number(since)) && Number(since) >= 0) {
+    consumerSince = Math.max(consumerSince, Math.floor(Number(since)));
+  }
+  if (Array.isArray(seenKeys)) {
+    for (const k of seenKeys.slice(-MAX_PROCESSED_SIGNALS)) {
+      markSignalProcessed(k);
+    }
+  }
+}
 
 export function savePositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
   if (!stateFile) return true;
@@ -32,6 +102,10 @@ export function savePositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
         updatedAt: new Date().toISOString(),
         positions: [...positions.values()],
         archivedUnresolved: archivedUnresolved.slice(-MAX_ARCHIVED_HISTORY),
+        consumer: {
+          since: consumerSince,
+          seenKeys: [...processedSignals].slice(-MAX_PROCESSED_SIGNALS),
+        },
       },
       null,
       2,
@@ -54,14 +128,33 @@ export function loadPositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
     const raw = JSON.parse(readFileSync(stateFile, "utf8"));
     const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.positions) ? raw.positions : []);
     const archivedList = Array.isArray(raw?.archivedUnresolved) ? raw.archivedUnresolved : [];
+    const rawConsumer = raw && typeof raw === "object" && !Array.isArray(raw) ? raw.consumer : null;
 
+    positions.clear();
+    opening.clear();
     archivedUnresolved.length = 0;
+    consumerSince = 0;
+    processedSignals.clear();
+    consumerEpoch += 1;
+
+    if (rawConsumer && typeof rawConsumer === "object") {
+      if (Number.isFinite(Number(rawConsumer.since)) && Number(rawConsumer.since) >= 0) {
+        consumerSince = Math.floor(Number(rawConsumer.since));
+      }
+      if (Array.isArray(rawConsumer.seenKeys)) {
+        for (const k of rawConsumer.seenKeys.slice(-MAX_PROCESSED_SIGNALS)) {
+          markSignalProcessed(k);
+        }
+      }
+    }
+
     const archivedMints = new Set();
     for (const arch of archivedList.slice(-MAX_ARCHIVED_HISTORY)) {
       if (arch && typeof arch.mint === "string" && arch.mint.trim()) {
         const cleanMint = arch.mint.trim();
         archivedUnresolved.push({ ...arch, mint: cleanMint });
         archivedMints.add(cleanMint);
+        recordPositionSignalKeys(cleanMint, arch.sig, arch);
       }
     }
 
@@ -108,6 +201,7 @@ export function loadPositions(stateFile = DEFAULT_STATE_FILE, deps = {}) {
         lastQuoteAt: Number.isFinite(Number(item.lastQuoteAt)) ? Number(item.lastQuoteAt) : Number(item.openedAt),
       };
       positions.set(restoredPos.mint, restoredPos);
+      recordPositionSignalKeys(cleanMint, restoredPos.sig, restoredPos);
       restored += 1;
     }
 
@@ -130,6 +224,8 @@ export function _resetPaperStateForTests() {
   positions.clear();
   opening.clear();
   archivedUnresolved.length = 0;
+  consumerSince = 0;
+  processedSignals.clear();
 }
 
 const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -156,6 +252,14 @@ export async function openPaper(mint, sig, meta = {}, deps = {}) {
   }
   if (positions.has(mint) || opening.has(mint)) {
     return logFn("signal_skip", { mint, reason: "position_already_open", ...meta });
+  }
+  if (hasProcessedPositionSignal(mint, sig, meta)) {
+    return logFn("signal_duplicate", {
+      mint,
+      sig: sig || null,
+      reason: "signal_already_processed",
+      ...meta,
+    });
   }
   if (positions.size + opening.size >= maxOpen) {
     return logFn("skip_maxopen", { mint, ...meta });
@@ -207,6 +311,7 @@ export async function openPaper(mint, sig, meta = {}, deps = {}) {
 
     const now = nowFn();
     const entry = q.price * (1 + entrySlip);
+    const prevProcessed = [...processedSignals];
     positions.set(mint, {
       mint,
       sig: sig || null,
@@ -232,7 +337,20 @@ export async function openPaper(mint, sig, meta = {}, deps = {}) {
       quoteAttempts,
       ...meta,
     });
-    savePositions(stateFile, deps);
+    recordPositionSignalKeys(mint, sig, meta);
+    const saveFn = deps.savePositions ?? savePositions;
+    const persisted = Boolean(saveFn(stateFile, deps));
+    if (!persisted) {
+      positions.delete(mint);
+      processedSignals.clear();
+      for (const k of prevProcessed) processedSignals.add(k);
+      logFn("error", {
+        where: "openPaper",
+        mint,
+        msg: "failed to persist opened position; rolling back paper entry",
+      });
+      return { ok: false, retryable: true, reason: "persistence_failed" };
+    }
     logFn("paper_open", {
       mint,
       sig: sig || null,
@@ -245,6 +363,7 @@ export async function openPaper(mint, sig, meta = {}, deps = {}) {
       ...meta,
     });
     notifyFn(`PAPER BUY ${mint}\nentry ${entry}\nliq $${Math.round(q.liqUsd)}`);
+    return { ok: true, opened: true };
   } finally {
     opening.delete(mint);
   }
@@ -318,8 +437,22 @@ function close(p, reason, pct, q, deps = {}) {
     exitSlip,
   });
 
+  const prevProcessed = [...processedSignals];
   positions.delete(p.mint);
-  savePositions(stateFile, deps);
+  recordPositionSignalKeys(p.mint, p.sig, p);
+  const saveFn = deps.savePositions ?? savePositions;
+  const persisted = Boolean(saveFn(stateFile, deps));
+  if (!persisted) {
+    positions.set(p.mint, p);
+    processedSignals.clear();
+    for (const k of prevProcessed) processedSignals.add(k);
+    logFn("error", {
+      where: "close",
+      mint: p.mint,
+      msg: "failed to persist closed position; keeping active position open",
+    });
+    return false;
+  }
 
   const heldSec = Math.round((nowFn() - p.openedAt) / 1000);
   logFn("paper_close", {
@@ -362,6 +495,7 @@ function archiveUnresolvedPosition(p, now, deps = {}) {
 
   // Stage removal and archival, then verify atomic persistence before committing
   positions.delete(p.mint);
+  recordPositionSignalKeys(p.mint, p.sig, p);
   archivedUnresolved.push(archivedEntry);
   if (archivedUnresolved.length > MAX_ARCHIVED_HISTORY) {
     archivedUnresolved.shift();

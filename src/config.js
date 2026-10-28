@@ -50,6 +50,8 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
     exitSlip: parseNum(env, "EXIT_SLIP", 0.08, { min: 0, max: 0.95 }),
     entryQuoteRetries: Math.floor(parseNum(env, "ENTRY_QUOTE_RETRIES", 2, { min: 0, max: 5 })),
     entryQuoteRetryMs: parseNum(env, "ENTRY_QUOTE_RETRY_MS", 3000, { min: 100, max: 30000 }),
+    rpcRetries: Math.floor(parseNum(env, "RPC_RETRIES", 2, { min: 0, max: 5 })),
+    rpcRetryMs: parseNum(env, "RPC_RETRY_MS", 500, { min: 10, max: 10000 }),
     gate: {
       maxTop10Pct: parseNum(env, "MAX_TOP10_PCT", 35, { min: 0.1, max: 100 }),
     },

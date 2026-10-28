@@ -1,19 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { selectPair } from "../src/price.js";
+import { pollOnce, _resetMainStateForTests } from "../src/main.js";
 import {
   openPaper,
   tick,
   evaluate,
   computeDoubleSlipPnl,
   loadPositions,
+  savePositions,
   openCount,
   isOpen,
   getOpenPositions,
   getArchivedPositions,
+  getConsumerState,
+  setConsumerState,
+  isSignalProcessed,
   _resetPaperStateForTests,
 } from "../src/paper.js";
 
@@ -398,6 +403,315 @@ test("positions persist to disk and recover safely on restart without duplicatio
     assert.equal(openCount(), 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+    _resetPaperStateForTests();
+  }
+});
+
+test("persisted consumer cursor and processed signal keys prevent duplicate paper entry across restart even after position closes", async () => {
+  _resetPaperStateForTests();
+  const dir = mkdtempSync(join(tmpdir(), "sniper-dedup-restart-"));
+  const stateFile = join(dir, "positions.json");
+  const events = [];
+  const logFn = (ev, data) => events.push({ ev, ...data });
+
+  try {
+    // 1) Open position for (mint-dup, sig-dup-1)
+    await openPaper(
+      "mint-dup",
+      "sig-dup-1",
+      { signalId: 12, signalKey: "sig-dup-1:mint-dup" },
+      {
+        getQuote: async () => ({ price: 1.0, liqUsd: 30000, pair: "pair-d" }),
+        log: logFn,
+        notify: () => {},
+        entrySlip: 0.05,
+        stateFile,
+        now: () => 1000,
+      },
+    );
+    assert.equal(openCount(), 1);
+
+    // 2) Close position via stop-loss so it is no longer in active positions
+    await tick({
+      getQuote: async () => ({ price: 0.5, liqUsd: 30000, pair: "pair-d" }),
+      log: logFn,
+      notify: () => {},
+      stateFile,
+      exitSlip: 0.08,
+      now: () => 5000,
+    });
+    assert.equal(openCount(), 0);
+
+    // 3) Simulate process restart and load persisted state
+    _resetPaperStateForTests();
+    loadPositions(stateFile, { log: logFn, maxOpen: 5 });
+
+    // 4) Re-playing the same signal (sig-dup-1, mint-dup) must be rejected as duplicate
+    await openPaper(
+      "mint-dup",
+      "sig-dup-1",
+      { signalId: 12, signalKey: "sig-dup-1:mint-dup" },
+      {
+        getQuote: async () => ({ price: 1.0, liqUsd: 30000, pair: "pair-d" }),
+        log: logFn,
+        notify: () => {},
+        entrySlip: 0.05,
+        stateFile,
+        now: () => 6000,
+      },
+    );
+    assert.equal(openCount(), 0);
+    const dupEv = events.find((e) => e.ev === "signal_duplicate" && e.reason === "signal_already_processed");
+    assert.ok(dupEv);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    _resetPaperStateForTests();
+  }
+});
+
+test("openPaper and close roll back in-memory state when savePositions fails, and loadPositions resets stale consumer state", async () => {
+  _resetPaperStateForTests();
+  const dir = mkdtempSync(join(tmpdir(), "sniper-disk-fail-"));
+  const stateFile = join(dir, "positions.json");
+  const events = [];
+  const logFn = (ev, data) => events.push({ ev, ...data });
+
+  try {
+    // 1) Disk write failure during openPaper must roll back position and processedSignals
+    const failOpenRes = await openPaper(
+      "mint-disk-fail",
+      "sig-df-1",
+      { signalId: 1, signalKey: "sig-df-1:mint-disk-fail" },
+      {
+        getQuote: async () => ({ price: 1.0, liqUsd: 30000, pair: "pair-df" }),
+        log: logFn,
+        notify: () => {},
+        entrySlip: 0.05,
+        stateFile,
+        writeFileSync: () => {
+          throw new Error("ENOSPC: no space left on device");
+        },
+        now: () => 1000,
+      },
+    );
+
+    assert.equal(failOpenRes.ok, false);
+    assert.equal(failOpenRes.retryable, true);
+    assert.equal(openCount(), 0);
+    assert.equal(isSignalProcessed("sig-df-1:mint-disk-fail"), false);
+    assert.equal(events.some((e) => e.ev === "paper_open"), false);
+
+    // 2) Now allow disk write to succeed -> position opens and persists
+    const okOpenRes = await openPaper(
+      "mint-disk-fail",
+      "sig-df-1",
+      { signalId: 1, signalKey: "sig-df-1:mint-disk-fail" },
+      {
+        getQuote: async () => ({ price: 1.0, liqUsd: 30000, pair: "pair-df" }),
+        log: logFn,
+        notify: () => {},
+        entrySlip: 0.05,
+        stateFile,
+        now: () => 2000,
+      },
+    );
+    assert.equal(okOpenRes.ok, true);
+    assert.equal(openCount(), 1);
+    assert.equal(isSignalProcessed("sig-df-1:mint-disk-fail"), true);
+
+    // 3) Simulate disk write failure during close (stop_loss) -> position must remain open in memory
+    await tick({
+      getQuote: async () => ({ price: 0.5, liqUsd: 30000, pair: "pair-df" }),
+      log: logFn,
+      notify: () => {},
+      stateFile,
+      exitSlip: 0.08,
+      writeFileSync: () => {
+        throw new Error("ENOSPC on close");
+      },
+      now: () => 5000,
+    });
+    assert.equal(openCount(), 1);
+    assert.equal(events.some((e) => e.ev === "paper_close"), false);
+
+    // 4) Verify loadPositions resets stale higher in-memory consumerSince/seenKeys to match loaded file
+    setConsumerState({ since: 99, seenKeys: ["stale-key:mint-stale"] });
+    assert.equal(getConsumerState().since, 99);
+
+    loadPositions(stateFile, { log: logFn, maxOpen: 5 });
+    assert.equal(getConsumerState().since, 0);
+    assert.equal(isSignalProcessed("stale-key:mint-stale"), false);
+    assert.equal(isSignalProcessed("sig-df-1:mint-disk-fail"), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    _resetPaperStateForTests();
+  }
+});
+
+test("pollOnce preserves mid-batch openPaper deduplication state when end-of-batch cursor save fails, across both next poll and restart", async () => {
+  _resetPaperStateForTests();
+  _resetMainStateForTests(39);
+  setConsumerState({ since: 39, seenKeys: [], reset: true });
+
+  const dir = mkdtempSync(join(tmpdir(), "sniper-midbatch-consistency-"));
+  const stateFile = join(dir, "positions.json");
+  const events = [];
+  const logFn = (ev, data) => events.push({ ev, ...data });
+
+  try {
+    let writeCalls = 0;
+    let gate41Calls = 0;
+    const signalsBatch = [
+      { id: 40, mint: "mint-40-open", sig: "sig-40", ts: 95000 },
+      { id: 41, mint: "mint-41-gate", sig: "sig-41", ts: 95000 },
+    ];
+
+    // Poll 1:
+    // - Signal 40 opens a paper position and its mid-batch savePositions succeeds (writeCalls === 1).
+    // - Signal 41 is evaluated by the gate (rejected, no mid-batch save).
+    // - End-of-batch cursor savePositions fails (writeCalls === 2 throws EIO).
+    await pollOnce({
+      stateFile,
+      writeFileSync: (file, data, enc) => {
+        writeCalls += 1;
+        if (writeCalls === 2) {
+          throw new Error("EIO: end-of-batch cursor write failed");
+        }
+        return writeFileSync(file, data, enc);
+      },
+      getSignals: async (since) => {
+        assert.equal(since, 39);
+        return {
+          seq: 41,
+          oldestId: 40,
+          halt: false,
+          signals: signalsBatch,
+        };
+      },
+      runGate: async (mint) => {
+        if (mint === "mint-40-open") {
+          return { pass: true, reasons: [], top10Pct: 15 };
+        }
+        gate41Calls += 1;
+        return { pass: false, reasons: ["lp_not_burned"], top10Pct: 50 };
+      },
+      getQuote: async () => ({ price: 1.0, liqUsd: 35000, pair: "pair-40" }),
+      notify: () => {},
+      isHalted: () => false,
+      log: logFn,
+      maxSignalAgeMs: 60000,
+      now: () => 100000,
+    });
+
+    assert.equal(writeCalls, 2);
+    assert.equal(gate41Calls, 1);
+    assert.equal(openCount(), 1);
+    assert.equal(isOpen("mint-40-open"), true);
+
+    // Verify mutual consistency between disk, in-memory consumer state, and deduplication keys:
+    const diskAfterFail = JSON.parse(readFileSync(stateFile, "utf8"));
+    assert.equal(diskAfterFail.positions.length, 1);
+    assert.equal(diskAfterFail.positions[0].mint, "mint-40-open");
+    assert.equal(diskAfterFail.consumer.since, 39);
+    assert.equal(diskAfterFail.consumer.seenKeys.includes("sig-40:mint-40-open"), true);
+    assert.equal(diskAfterFail.consumer.seenKeys.includes("queue:40:mint-40-open"), true);
+    assert.equal(diskAfterFail.consumer.seenKeys.includes("sig-41:mint-41-gate"), false);
+
+    const memConsumer = getConsumerState();
+    assert.equal(memConsumer.since, 39);
+    assert.equal(isSignalProcessed("sig-40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("queue:40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("sig-41:mint-41-gate"), false);
+
+    // Poll 2 (in-process retry without restart):
+    // - Signal 40 must be deduplicated immediately (never re-opened),
+    // - Signal 41 must NOT be silently skipped (gate runs again),
+    // - End-of-batch save succeeds and advances cursor to 41.
+    let gate40RetryCalls = 0;
+    await pollOnce({
+      stateFile,
+      getSignals: async (since) => {
+        assert.equal(since, 39);
+        return {
+          seq: 41,
+          oldestId: 40,
+          halt: false,
+          signals: signalsBatch,
+        };
+      },
+      runGate: async (mint) => {
+        if (mint === "mint-40-open") {
+          gate40RetryCalls += 1;
+          return { pass: true, reasons: [], top10Pct: 15 };
+        }
+        gate41Calls += 1;
+        return { pass: false, reasons: ["lp_not_burned"], top10Pct: 50 };
+      },
+      getQuote: async () => ({ price: 1.0, liqUsd: 35000, pair: "pair-40" }),
+      notify: () => {},
+      isHalted: () => false,
+      log: logFn,
+      maxSignalAgeMs: 60000,
+      now: () => 101000,
+    });
+
+    assert.equal(gate40RetryCalls, 0);
+    assert.equal(gate41Calls, 2);
+    assert.equal(openCount(), 1);
+    assert.equal(getConsumerState().since, 41);
+    assert.equal(isSignalProcessed("sig-40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("queue:40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("sig-41:mint-41-gate"), true);
+
+    // Now test the exact same failure followed by a process restart before Poll 2:
+    writeFileSync(stateFile, JSON.stringify(diskAfterFail, null, 2), "utf8");
+    _resetPaperStateForTests();
+    _resetMainStateForTests(0);
+
+    const restored = loadPositions(stateFile, { log: logFn, maxOpen: 5 });
+    assert.equal(restored, 1);
+    assert.equal(getConsumerState().since, 39);
+    assert.equal(isSignalProcessed("sig-40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("queue:40:mint-40-open"), true);
+    assert.equal(isSignalProcessed("sig-41:mint-41-gate"), false);
+
+    let gate40RestartCalls = 0;
+    let gate41RestartCalls = 0;
+    await pollOnce({
+      stateFile,
+      getSignals: async (since) => {
+        assert.equal(since, 39);
+        return {
+          seq: 41,
+          oldestId: 40,
+          halt: false,
+          signals: signalsBatch,
+        };
+      },
+      runGate: async (mint) => {
+        if (mint === "mint-40-open") {
+          gate40RestartCalls += 1;
+          return { pass: true, reasons: [], top10Pct: 15 };
+        }
+        gate41RestartCalls += 1;
+        return { pass: false, reasons: ["lp_not_burned"], top10Pct: 50 };
+      },
+      getQuote: async () => ({ price: 1.0, liqUsd: 35000, pair: "pair-40" }),
+      notify: () => {},
+      isHalted: () => false,
+      log: logFn,
+      maxSignalAgeMs: 60000,
+      now: () => 102000,
+    });
+
+    assert.equal(gate40RestartCalls, 0);
+    assert.equal(gate41RestartCalls, 1);
+    assert.equal(openCount(), 1);
+    assert.equal(getConsumerState().since, 41);
+    assert.equal(events.filter((e) => e.ev === "paper_open" && e.mint === "mint-40-open").length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    _resetMainStateForTests(0);
     _resetPaperStateForTests();
   }
 });

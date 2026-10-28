@@ -185,3 +185,34 @@ test("rpc checks HTTP status (429/500), handles malformed JSON, and redacts API 
   assert.equal(redacted.includes("MY_KEY_12345"), false);
   assert.equal(redacted.includes("SECRET_BEARER_TOKEN"), false);
 });
+
+test("rpc retries transient HTTP 429 and network errors up to rpcRetries and succeeds on recovery", async () => {
+  let attempts = 0;
+  const res = await rpc("getTokenLargestAccounts", ["mint-recover"], {
+    rpcUrl: "http://127.0.0.1:8899",
+    rpcRetries: 2,
+    rpcRetryMs: 1,
+    sleep: async () => {},
+    fetch: async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return { ok: false, status: 429 };
+      }
+      if (attempts === 2) {
+        throw new Error("socket hang up");
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          jsonrpc: "2.0",
+          id: 1,
+          result: { value: [{ address: "ta-1", uiAmount: 42 }] },
+        }),
+      };
+    },
+  });
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(res, { value: [{ address: "ta-1", uiAmount: 42 }] });
+});
