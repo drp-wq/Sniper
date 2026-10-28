@@ -67,8 +67,10 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
   };
 }
 
+const isReportCli = Boolean(process.argv[1] && process.argv[1].endsWith("report.js"));
 const isTestEnv =
   process.env.NODE_ENV === "test" ||
   process.env.NODE_TEST_CONTEXT !== undefined ||
-  process.execArgv.some((arg) => arg.startsWith("--test"));
+  process.execArgv.some((arg) => arg.startsWith("--test")) ||
+  isReportCli;
 export const cfg = loadConfig(process.env, { allowPlaceholder: isTestEnv });

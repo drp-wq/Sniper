@@ -1,0 +1,109 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { runGate } from "../src/gate.js";
+
+const SYSTEM_PROGRAM = "11111111111111111111111111111111";
+const RAYDIUM_PROGRAM = "675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8";
+
+test("runGate rejects tokens when mintAuthority or freezeAuthority is still active", async () => {
+  const res = await runGate(
+    "mint-active-auth",
+    { maxTop10Pct: 35 },
+    {
+      rpc: async (method) => {
+        if (method === "getAccountInfo") {
+          return {
+            value: {
+              data: {
+                parsed: {
+                  info: {
+                    decimals: 6,
+                    mintAuthority: "SomeAuthorityPubkey",
+                    freezeAuthority: "SomeFreezePubkey",
+                  },
+                },
+              },
+            },
+          };
+        }
+        if (method === "getTokenSupply") return { value: { uiAmount: 1000 } };
+        if (method === "getTokenLargestAccounts") return { value: [] };
+        return { value: [] };
+      },
+    },
+  );
+
+  assert.equal(res.pass, false);
+  assert.ok(res.reasons.includes("mint authority not revoked"));
+  assert.ok(res.reasons.includes("freeze authority not revoked"));
+});
+
+test("runGate aggregates multiple token accounts owned by the same wallet and excludes PDA vaults", async () => {
+  // Supply = 1000.
+  // Raydium PDA holds 500 (50% - should be excluded).
+  // Wallet-A holds 3 token accounts of 80 each = 240 (24%).
+  // Unfunded Wallet-B (null accountInfo) holds 150 (15%).
+  // Combined wallet concentration = 39% (> 35% threshold).
+  let callIndex = 0;
+  const res = await runGate(
+    "mint-sybil",
+    { maxTop10Pct: 35 },
+    {
+      rpc: async (method) => {
+        if (method === "getAccountInfo") {
+          return {
+            value: {
+              data: {
+                parsed: {
+                  info: { decimals: 6, mintAuthority: null, freezeAuthority: null },
+                },
+              },
+            },
+          };
+        }
+        if (method === "getTokenSupply") {
+          return { value: { uiAmount: 1000 } };
+        }
+        if (method === "getTokenLargestAccounts") {
+          return {
+            value: [
+              { address: "ta-pda", uiAmount: 500 },
+              { address: "ta-a1", uiAmount: 80 },
+              { address: "ta-a2", uiAmount: 80 },
+              { address: "ta-a3", uiAmount: 80 },
+              { address: "ta-b1", uiAmount: 150 },
+            ],
+          };
+        }
+        if (method === "getMultipleAccounts") {
+          callIndex += 1;
+          if (callIndex === 1) {
+            // Token account owners
+            return {
+              value: [
+                { data: { parsed: { info: { owner: "owner-pda" } } } },
+                { data: { parsed: { info: { owner: "wallet-A" } } } },
+                { data: { parsed: { info: { owner: "wallet-A" } } } },
+                { data: { parsed: { info: { owner: "wallet-A" } } } },
+                { data: { parsed: { info: { owner: "wallet-B-unfunded" } } } },
+              ],
+            };
+          }
+          // Owner account info: owner-pda is owned by Raydium program, wallet-A by SYSTEM_PROGRAM, wallet-B-unfunded is null
+          return {
+            value: [
+              { owner: RAYDIUM_PROGRAM },
+              { owner: SYSTEM_PROGRAM },
+              null,
+            ],
+          };
+        }
+        return { value: null };
+      },
+    },
+  );
+
+  assert.equal(res.top10Pct, 39);
+  assert.equal(res.pass, false);
+  assert.ok(res.reasons[0].includes("39.0%"));
+});
