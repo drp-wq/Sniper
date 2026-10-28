@@ -6,7 +6,10 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.view.Window;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -36,6 +39,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        setTheme(android.R.style.Theme_DeviceDefault_NoActionBar);
         super.onCreate(savedInstanceState);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -169,6 +173,38 @@ public class MainActivity extends Activity {
             assertLocalContext();
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
             return prefs.getString(KEY_STATE, "");
+        }
+
+        @JavascriptInterface
+        public void hapticFeedback(String type) {
+            assertLocalContext();
+            if (context == null || type == null) return;
+            try {
+                Vibrator v = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
+                if (v == null || !v.hasVibrator()) return;
+                String t = type.toLowerCase().trim();
+                if ("click".equals(t) || "buy".equals(t)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        v.vibrate(VibrationEffect.createOneShot(18, VibrationEffect.DEFAULT_AMPLITUDE));
+                    } else {
+                        v.vibrate(18);
+                    }
+                } else if ("success".equals(t) || "tp".equals(t)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        long[] timings = new long[]{0, 30, 70, 45};
+                        int[] amplitudes = new int[]{0, 200, 0, 255};
+                        v.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1));
+                    } else {
+                        v.vibrate(new long[]{0, 30, 70, 45}, -1);
+                    }
+                } else if ("warning".equals(t) || "sl".equals(t) || "halt".equals(t)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        v.vibrate(VibrationEffect.createOneShot(80, VibrationEffect.DEFAULT_AMPLITUDE));
+                    } else {
+                        v.vibrate(80);
+                    }
+                }
+            } catch (Exception ignored) {}
         }
 
         @JavascriptInterface

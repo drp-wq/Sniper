@@ -41,6 +41,9 @@ class SoundManager {
 
   playBuy() {
     try {
+      if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
+        (window as any).AndroidBridge.hapticFeedback('buy');
+      }
       this.initCtx();
       if (!this.ctx) return;
       const osc = this.ctx.createOscillator();
@@ -59,6 +62,9 @@ class SoundManager {
 
   playTakeProfit() {
     try {
+      if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
+        (window as any).AndroidBridge.hapticFeedback('tp');
+      }
       this.initCtx();
       if (!this.ctx) return;
       const osc = this.ctx.createOscillator();
@@ -77,6 +83,9 @@ class SoundManager {
 
   playStopLoss() {
     try {
+      if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
+        (window as any).AndroidBridge.hapticFeedback('sl');
+      }
       this.initCtx();
       if (!this.ctx) return;
       const osc = this.ctx.createOscillator();
