@@ -93,16 +93,48 @@ export function createUiHandler(deps = {}) {
       });
     }
 
-    if (path === "/api/proxy" && req.method === "POST") {
+    if (path === "/api/proxy") {
       try {
-        const rawBody = await readRequestBody(req);
+        const headerTargetUrl = req.headers["x-target-url"] ? String(req.headers["x-target-url"]).trim() : "";
+        const rawBody = req.method !== "GET" && req.method !== "HEAD" ? await readRequestBody(req) : "";
+
+        // Mode A: x-target-url header (used by integrated React Sniper-dashboard)
+        if (headerTargetUrl) {
+          let targetUrl = headerTargetUrl;
+          if (targetUrl === "https://api.mainnet-beta.solana.com" || targetUrl === "__SERVER_ENV_RPC_URL__") {
+            targetUrl = runtimeCfg.rpcUrl;
+          }
+          if (!/^https?:\/\//i.test(targetUrl)) {
+            return sendJson(res, 400, { error: "invalid target url" });
+          }
+
+          const headers = { "content-type": "application/json" };
+          const reqXKey = req.headers["x-key"] ? String(req.headers["x-key"]).trim() : "";
+          const cleanWorker = (runtimeCfg.workerUrl || "").replace(/\/$/, "");
+          if (reqXKey) {
+            headers["x-key"] = reqXKey;
+          } else if (cleanWorker && targetUrl.startsWith(cleanWorker) && runtimeCfg.appKey) {
+            headers["x-key"] = runtimeCfg.appKey;
+          }
+
+          const upstream = await fetchFn(targetUrl, {
+            method: req.method || "GET",
+            headers,
+            body: req.method !== "GET" && req.method !== "HEAD" && rawBody ? rawBody : undefined,
+            signal: AbortSignal.timeout(10000),
+          });
+          const data = await upstream.json().catch(() => ({}));
+          return sendJson(res, upstream.status || 200, data);
+        }
+
+        // Mode B: JSON envelope { url, method, headers, body }
         const parsed = JSON.parse(rawBody || "{}");
         let targetUrl = String(parsed.url || "").trim();
         const method = String(parsed.method || "GET").toUpperCase();
         const headers = { ...(parsed.headers && typeof parsed.headers === "object" ? parsed.headers : {}) };
         const reqBody = parsed.body ?? null;
 
-        if (targetUrl === "__SERVER_ENV_RPC_URL__") {
+        if (targetUrl === "__SERVER_ENV_RPC_URL__" || targetUrl === "https://api.mainnet-beta.solana.com") {
           targetUrl = runtimeCfg.rpcUrl;
         }
 
@@ -110,7 +142,6 @@ export function createUiHandler(deps = {}) {
           return sendJson(res, 400, { error: "invalid target url" });
         }
 
-        // Inject server APP_KEY automatically when calling configured WORKER_URL if client left x-key empty
         const cleanWorker = (runtimeCfg.workerUrl || "").replace(/\/$/, "");
         if (cleanWorker && targetUrl.startsWith(cleanWorker) && !headers["x-key"] && runtimeCfg.appKey) {
           headers["x-key"] = runtimeCfg.appKey;

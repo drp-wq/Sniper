@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F17"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="sol" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9945FF"/>
+      <stop offset="50%" stop-color="#14F195"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+    <linearGradient id="targetGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10B981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="504" height="504" x="4" y="4" rx="108" fill="none" stroke="#1F2937" stroke-width="4"/>
+  
+  <!-- Outer Crosshair Rings -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="#1F2937" stroke-width="6" stroke-dasharray="8 8"/>
+  <circle cx="256" cy="256" r="130" fill="none" stroke="url(#targetGrad)" stroke-width="8" opacity="0.8"/>
+  <circle cx="256" cy="256" r="70" fill="none" stroke="#10B981" stroke-width="4"/>
+  
+  <!-- Reticle lines -->
+  <line x1="256" y1="40" x2="256" y2="110" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+  <line x1="256" y1="402" x2="256" y2="472" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+  <line x1="40" y1="256" x2="110" y2="256" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+  <line x1="402" y1="256" x2="472" y2="256" stroke="#10B981" stroke-width="6" stroke-linecap="round"/>
+
+  <!-- Center Lightning / Bolt -->
+  <path d="M272 150 L190 270 L250 270 L240 362 L322 242 L262 242 Z" fill="url(#sol)" />
+
+  <!-- Paper Label -->
+  <rect x="166" y="390" width="180" height="42" rx="10" fill="#1E293B" stroke="#334155" stroke-width="2"/>
+  <text x="256" y="417" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#94A3B8" text-anchor="middle" letter-spacing="3">PAPER ONLY</text>
+</svg>
