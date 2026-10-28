@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Sniper Bot — Paper Command Center</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="top-bar">
+      <div class="brand-row">
+        <div class="brand-logo">S</div>
+        <div>
+          <div class="brand-title">SNIPER COMMAND</div>
+          <div class="brand-sub" id="modeSubtitle">Solana Scanner + Paper Engine</div>
+        </div>
+      </div>
+      <div class="status-pills">
+        <span class="pill pill-paper" title="No keys, no signing, no real trades">
+          <span class="dot"></span> PAPER MODE ONLY
+        </span>
+        <span class="pill pill-warn" id="workerStatusPill">
+          <span class="dot"></span> <span id="workerStatusText">WORKER: IDLE</span>
+        </span>
+        <span class="pill" id="haltStatusPill">
+          <span class="dot"></span> <span id="haltStatusText">HALT: OFF</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- TAB 1: DASHBOARD -->
+    <main class="tab-content active" id="tab-dashboard">
+      <!-- Control Banner -->
+      <section class="card control-banner">
+        <div>
+          <div class="card-title">Live Scanner &amp; Kill-Switch Controls</div>
+          <div class="kpi-sub" id="scannerLoopStatus">Auto-loop: Paused (Tap Start Loop or Poll Once)</div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="btnToggleLoop" onclick="window.SniperApp.toggleLoop()">▶ Start Auto-Loop</button>
+          <button class="btn-cyan" onclick="window.SniperApp.pollOnceNow()">⟳ Poll Signals Now</button>
+          <button onclick="window.SniperApp.tickPricesNow()">⚡ Tick Prices</button>
+          <button class="btn-danger" id="btnHaltToggle" onclick="window.SniperApp.toggleHalt()">■ HALT ENTRIES</button>
+        </div>
+      </section>
+
+      <!-- KPI Grid -->
+      <div class="grid-kpi">
+        <div class="card">
+          <div class="card-title">Open Paper Slots</div>
+          <div class="kpi-value" id="kpiOpenSlots">0 / 5</div>
+          <div class="kpi-sub" id="kpiUnresolvedSub">Unresolved: 0 | Archived: 0</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">200-Trade Eval Gate</div>
+          <div class="kpi-value" id="kpiClosedCount">0 / 200</div>
+          <div class="progress-track"><div class="progress-fill" id="evalProgressFill"></div></div>
+          <div class="kpi-sub" id="kpiEvalVerdict" style="margin-top:5px;">INCOMPLETE (0/200)</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Win Rate &amp; 1x PnL</div>
+          <div class="kpi-value" id="kpiWinRate">0.0%</div>
+          <div class="kpi-sub" id="kpiPnl1x">Mean: 0.00% | Med: 0.00%</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">2x Slippage Stress</div>
+          <div class="kpi-value" id="kpiMean2x">0.00%</div>
+          <div class="kpi-sub" id="kpiMed2x">Med 2x: 0.00% (10% in / 16% out)</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Equity &amp; Drawdown</div>
+          <div class="kpi-value" id="kpiEquityIdx">100.00</div>
+          <div class="kpi-sub" id="kpiDrawdown">Max DD: 0.00% (0.00 pts)</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Relay Queue &amp; Cursor</div>
+          <div class="kpi-value" id="kpiSeqCursor">seq: 0</div>
+          <div class="kpi-sub" id="kpiHeartbeatSub">Cursor: 0 | HB: --</div>
+        </div>
+      </div>
+
+      <!-- Quick Open Positions Preview -->
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">Active Paper Positions</span>
+          <button class="btn-sm" onclick="window.SniperApp.switchTab('positions')">View All →</button>
+        </div>
+        <div id="dashOpenPositions" class="item-list">
+          <div class="empty-state">No active paper positions. Poll signals or inspect a mint on the Gate tab.</div>
+        </div>
+      </section>
+
+      <!-- Recent Activity Log -->
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">Recent Paper Events (JSONL Stream)</span>
+          <button class="btn-sm" onclick="window.SniperApp.sendHeartbeatNow()">♥ Send Heartbeat</button>
+        </div>
+        <div id="dashRecentEvents" class="item-list">
+          <div class="empty-state">No events recorded in this session yet.</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- TAB 2: POSITIONS -->
+    <main class="tab-content" id="tab-positions">
+      <div class="sub-tabs">
+        <button class="sub-tab active" id="subtab-btn-open" onclick="window.SniperApp.switchPosSubTab('open')">Open (<span id="cntOpen">0</span>)</button>
+        <button class="sub-tab" id="subtab-btn-closed" onclick="window.SniperApp.switchPosSubTab('closed')">Closed (<span id="cntClosed">0</span>)</button>
+        <button class="sub-tab" id="subtab-btn-archived" onclick="window.SniperApp.switchPosSubTab('archived')">Archived (<span id="cntArchived">0</span>)</button>
+      </div>
+
+      <section class="card" id="pos-panel-open">
+        <div class="card-header">
+          <span class="card-title">Open Paper Positions (Pessimistic +5% Entry / -8% Exit Slip)</span>
+          <button class="btn-sm btn-cyan" onclick="window.SniperApp.tickPricesNow()">⚡ Refresh Quotes</button>
+        </div>
+        <div id="listOpenPositions" class="item-list"></div>
+      </section>
+
+      <section class="card" id="pos-panel-closed" style="display:none;">
+        <div class="card-header">
+          <span class="card-title">Completed Paper Trades</span>
+        </div>
+        <div id="listClosedPositions" class="item-list"></div>
+      </section>
+
+      <section class="card" id="pos-panel-archived" style="display:none;">
+        <div class="card-header">
+          <span class="card-title">Archived Unresolved Positions (&gt;30m Missing Quotes)</span>
+        </div>
+        <div id="listArchivedPositions" class="item-list"></div>
+      </section>
+    </main>
+
+    <!-- TAB 3: SIGNALS & ON-CHAIN GATE -->
+    <main class="tab-content" id="tab-signals">
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">On-Demand Solana Mint Gate &amp; Quote Inspector</span>
+        </div>
+        <div class="input-group">
+          <label class="input-label">Paste Solana Token Mint Address (SPL or Token-2022)</label>
+          <div class="input-row">
+            <input type="text" id="inspectMintInput" placeholder="e.g. DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263" />
+            <button class="btn-primary" onclick="window.SniperApp.inspectMintNow()">Run Gate</button>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-bottom:10px;">
+          <button class="btn-sm" onclick="window.SniperApp.fillSampleMint('DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263')">Sample: BONK</button>
+          <button class="btn-sm" onclick="window.SniperApp.fillSampleMint('EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm')">Sample: WIF</button>
+          <button class="btn-sm" onclick="window.SniperApp.fillSampleMint('So11111111111111111111111111111111111111112')">Sample: WSOL</button>
+        </div>
+        <div id="gateInspectorResult"></div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">Cloudflare Worker Signal Queue (`SignalQueueDO`)</span>
+          <button class="btn-sm btn-cyan" onclick="window.SniperApp.pollOnceNow()">⟳ Poll `/signals`</button>
+        </div>
+        <div id="listSignalsFeed" class="item-list">
+          <div class="empty-state">Tap "Poll /signals" to fetch the latest queue items from sniper-relay.</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- TAB 4: ANALYTICS & REPORT -->
+    <main class="tab-content" id="tab-analytics">
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">Compounded Equity Curve (10% Stake / Trade, Starting = 100)</span>
+        </div>
+        <div id="equityChartContainer" style="width:100%; height:180px; background:var(--bg-input); border:1px solid var(--border); border-radius:8px; display:flex; align-items:center; justify-content:center;"></div>
+      </section>
+
+      <div class="grid-2">
+        <section class="card">
+          <div class="card-header"><span class="card-title">Performance by Exit Reason</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Reason</th><th>Count</th><th>Mean</th><th>Median</th></tr></thead>
+              <tbody id="tableByReason"><tr><td colspan="4" class="empty-state">No closed trades yet</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header"><span class="card-title">Skip &amp; Filter Counters</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Skip / Filter Reason</th><th>Count</th></tr></thead>
+              <tbody id="tableBySkip"><tr><td colspan="2" class="empty-state">No skips recorded</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">CLI Report Summary (`src/report.js`)</span>
+          <div class="btn-row">
+            <button class="btn-sm" onclick="window.SniperApp.exportJsonl()">⬇ Export JSONL</button>
+            <button class="btn-sm btn-danger" onclick="window.SniperApp.resetDemoData()">✕ Clear Local Session Logs</button>
+          </div>
+        </div>
+        <pre id="formattedReportText" class="mono" style="background:var(--bg-input); padding:12px; border-radius:8px; border:1px solid var(--border); overflow-x:auto; font-size:12px; color:#cbd5e1;">No log yet.</pre>
+      </section>
+    </main>
+
+    <!-- TAB 5: SETTINGS & E2E CONNECTION -->
+    <main class="tab-content" id="tab-settings">
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">End-to-End Connection Endpoints</span>
+          <span class="pill pill-paper" id="runtimeEnvBadge">Runtime: Detecting...</span>
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Cloudflare Worker URL (`WORKER_URL`)</label>
+          <input type="text" id="cfgWorkerUrl" placeholder="https://sniper-relay.pjdebnath01.workers.dev" />
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Worker App Key (`APP_KEY` — sent via `x-key` header)</label>
+          <input type="password" id="cfgAppKey" placeholder="Leave blank if using local Node server .env proxy" />
+        </div>
+
+        <div class="input-group">
+          <label class="input-label">Solana JSON-RPC URL (`RPC_URL` — Helius Mainnet RPC)</label>
+          <input type="password" id="cfgRpcUrl" placeholder="https://mainnet.helius-rpc.com/?api-key=..." />
+        </div>
+
+        <div class="grid-2">
+          <div class="input-group">
+            <label class="input-label">Poll Interval (`POLL_MS`)</label>
+            <input type="number" id="cfgPollMs" value="3000" min="500" max="60000" />
+          </div>
+          <div class="input-group">
+            <label class="input-label">Price Tick (`PRICE_MS`)</label>
+            <input type="number" id="cfgPriceMs" value="5000" min="1000" max="60000" />
+          </div>
+          <div class="input-group">
+            <label class="input-label">Max Open Positions (`MAX_OPEN`)</label>
+            <input type="number" id="cfgMaxOpen" value="5" min="1" max="25" />
+          </div>
+          <div class="input-group">
+            <label class="input-label">Min Pool Liquidity USD (`MIN_LIQ_USD`)</label>
+            <input type="number" id="cfgMinLiqUsd" value="15000" min="1000" />
+          </div>
+          <div class="input-group">
+            <label class="input-label">Max Top-10 Wallet % (`MAX_TOP10_PCT`)</label>
+            <input type="number" id="cfgMaxTop10Pct" value="35" min="1" max="100" />
+          </div>
+          <div class="input-group">
+            <label class="input-label">Entry / Exit Slippage (`0.05` / `0.08`)</label>
+            <input type="text" id="cfgSlipDisplay" value="5% Entry / 8% Exit (Fixed Paper Default)" disabled />
+          </div>
+        </div>
+
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn-primary" onclick="window.SniperApp.saveSettings()">💾 Save Connection Config</button>
+          <button class="btn-cyan" onclick="window.SniperApp.verifyEndToEnd()">🔌 Verify End-to-End Connection</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-header">
+          <span class="card-title">End-to-End Connectivity Diagnostic Report</span>
+        </div>
+        <div id="e2eDiagOutput" class="item-list">
+          <div class="empty-state">Tap "Verify End-to-End Connection" to test Cloudflare Worker (`SignalQueueDO`), Solana Helius RPC, and DexScreener quotes.</div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Bottom Tab Bar -->
+    <nav class="bottom-nav">
+      <button class="nav-btn active" id="nav-dashboard" onclick="window.SniperApp.switchTab('dashboard')">
+        <span class="nav-icon">◈</span>
+        <span>Command</span>
+      </button>
+      <button class="nav-btn" id="nav-positions" onclick="window.SniperApp.switchTab('positions')">
+        <span class="nav-icon">◎</span>
+        <span>Positions</span>
+      </button>
+      <button class="nav-btn" id="nav-signals" onclick="window.SniperApp.switchTab('signals')">
+        <span class="nav-icon">⚡</span>
+        <span>Gate &amp; Queue</span>
+      </button>
+      <button class="nav-btn" id="nav-analytics" onclick="window.SniperApp.switchTab('analytics')">
+        <span class="nav-icon">▤</span>
+        <span>Report</span>
+      </button>
+      <button class="nav-btn" id="nav-settings" onclick="window.SniperApp.switchTab('settings')">
+        <span class="nav-icon">⚙</span>
+        <span>Connect</span>
+      </button>
+    </nav>
+  </div>
+
+  <div class="toast" id="toastMsg"></div>
+  <script src="app.js"></script>
+</body>
+</html>
