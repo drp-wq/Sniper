@@ -5,7 +5,7 @@
  * Automatically falls back to /api/proxy in browser environments if CORS is restricted.
  */
 
-import { AppConfig, SignalsResponse, WorkerExportKv } from '../types';
+import type { AppConfig, SignalsResponse, WorkerExportKv } from '../types/index.ts';
 
 interface FetchResult<T> {
   data: T | null;

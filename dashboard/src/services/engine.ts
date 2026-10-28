@@ -4,7 +4,7 @@
  * Price Tick Loop, Exit Rules, and Analytics calculation.
  */
 
-import {
+import type {
   AppConfig,
   ClosedTrade,
   EngineStats,
@@ -16,11 +16,11 @@ import {
   SkipReason,
   WorkerExportKv,
   WorkerSignal,
-} from '../types';
-import { DexScreenerService } from './dexScreener';
-import { SolanaRpc } from './solanaRpc';
-import { StorageService } from './storage';
-import { WorkerApi } from './workerApi';
+} from '../types/index.ts';
+import { DexScreenerService } from './dexScreener.ts';
+import { SolanaRpc } from './solanaRpc.ts';
+import { StorageService } from './storage.ts';
+import { WorkerApi } from './workerApi.ts';
 
 type Listener = () => void;
 
@@ -507,6 +507,7 @@ export class SniperEngine {
       trailingArmed: false,
       missedQuoteTicks: 0,
       isUnresolved: false,
+      simulated: signal.simulated ?? false,
 
       lastHighAt: now,
       lastTickAt: now,
@@ -544,10 +545,12 @@ export class SniperEngine {
     try {
       const exitSlip = this.config.exitSlip;
       const now = Date.now();
-      const positionsToKeep: PaperPosition[] = [];
 
-      for (const pos of this.openPositions) {
+      for (const pos of [...this.openPositions]) {
         const quote = await DexScreenerService.getQuote(pos.mint, pos.pairAddress);
+
+        // Check if position was closed or archived while awaiting quote
+        if (!this.openPositions.some(p => p.id === pos.id)) continue;
 
         if (!quote) {
           pos.missedQuoteTicks += 1;
@@ -566,7 +569,6 @@ export class SniperEngine {
             continue;
           }
 
-          positionsToKeep.push(pos);
           continue;
         }
 
@@ -602,6 +604,7 @@ export class SniperEngine {
       // Rule A: Take Profit Half at >= +100%
       if (!pos.tookHalf && rawPnlPct >= this.config.takeProfitHalfPct) {
         pos.tookHalf = true;
+        pos.halfRawPrice = quote.priceUsd;
         // Bank 50% of the position at +100%
         pos.bankedUsd = (pos.stakeUsd * 0.5) * (rawPnlPct / 100);
         if (this.config.soundAlerts) sounds.playTakeProfit();
@@ -663,11 +666,8 @@ export class SniperEngine {
       } else {
         pos.enteredBandAt = undefined;
       }
-
-      positionsToKeep.push(pos);
     }
 
-    this.openPositions = positionsToKeep;
     StorageService.saveOpenPositions(this.openPositions);
     this.notify();
     } finally {
@@ -753,6 +753,7 @@ export class SniperEngine {
       exitReason,
       tookHalf: pos.tookHalf,
       bankedUsd,
+      simulated: pos.simulated,
       pnlPct1x: Math.round(pnlPct1x * 100) / 100,
       pnlUsd1x: Math.round(pnlUsd1x * 100) / 100,
       pnlPct2x: Math.round(pnlPct2x * 100) / 100,
@@ -811,6 +812,7 @@ export class SniperEngine {
       sig: `${Math.random().toString(36).substring(2, 12)}TxMockSignatureSolanaMainnet`,
       ts: Date.now(),
       chainTs: Math.floor(Date.now() / 1000),
+      simulated: true,
     };
 
     this.addToast('info', 'TEST SIGNAL INJECTED', `Auditing ${mint.slice(0, 6)}... through on-chain safety gate`);
@@ -857,9 +859,9 @@ export class SniperEngine {
   }
 
   /**
-   * Pre-load 200 Benchmark Trades
+   * Import Closed Trades from JSONL file
    */
-  public loadBenchmarkTrades(trades: ClosedTrade[]) {
+  public importClosedTrades(trades: ClosedTrade[]) {
     this.closedTrades = [...trades];
     StorageService.saveClosedTrades(this.closedTrades);
     this.notify();
@@ -899,7 +901,7 @@ export class SniperEngine {
    * Compute Real-Time Stats, Equity Curves, and Evaluation Gate
    */
   public getStats(): EngineStats {
-    const closed = this.closedTrades;
+    const closed = this.closedTrades.filter(t => !t.simulated);
     const closedCount = closed.length;
     const wins = closed.filter(t => t.pnlPct1x > 0);
     const winCount = wins.length;
@@ -1017,7 +1019,7 @@ export class SniperEngine {
   }
 
   public getEquityCurvePoints(): EquityPoint[] {
-    const closed = [...this.closedTrades].reverse();
+    const closed = [...this.closedTrades.filter(t => !t.simulated)].reverse();
     const points: EquityPoint[] = [{
       tradeIndex: 0,
       equity1x: 100,

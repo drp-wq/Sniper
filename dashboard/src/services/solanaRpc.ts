@@ -9,7 +9,7 @@
  * - Top-10 concentration <= 35% (excluding PDA program vaults & AMM pools)
  */
 
-import { AppConfig, GateVerdict, GateStepResult } from '../types';
+import type { AppConfig, GateVerdict, GateStepResult } from '../types/index.ts';
 
 interface JsonRpcResponse<T> {
   jsonrpc: string;
@@ -30,6 +30,28 @@ const KNOWN_AMM_PROGRAMS = new Set([
   'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB', // Meteora DLMM
   'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc', // Orca Whirlpool
   'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // Meteora Dynamic AMM
+]);
+
+// Explicit allowlist of known-handled Token-2022 extensions. Any unknown extension causes the gate to fail-closed.
+const KNOWN_HANDLED_EXTENSIONS = new Set([
+  // Dangerous extensions handled with specific rule evaluations:
+  'permanentDelegate',
+  'transferHook',
+  'transferFeeConfig',
+  'defaultAccountState',
+  'nonTransferable',
+  'mintCloseAuthority',
+  'closeAuthority',
+  'pausable',
+  'pausableConfig',
+  // Benign extensions (metadata / informational pointers that do not restrict transfers):
+  'metadataPointer',       // Pointer to metadata account; informational only, no transfer control
+  'tokenMetadata',         // Token metadata (name, symbol, uri); informational only
+  'groupPointer',          // Pointer to mint group configurations; informational only
+  'groupMemberPointer',    // Pointer to group membership; informational only
+  'tokenGroup',            // Group structure metadata; informational only
+  'tokenGroupMember',      // Group member details; informational only
+  'interestBearingConfig', // Display configuration for accrued nominal interest; does not seize, tax, or freeze balances
 ]);
 
 function hasNonEmptyAuthority(auth: any): boolean {
@@ -131,7 +153,12 @@ export const SolanaRpc = {
   /**
    * Run complete on-chain safety gate for a token mint
    */
-  async runOnChainGate(config: AppConfig, mint: string): Promise<GateVerdict> {
+  async runOnChainGate(
+    config: AppConfig,
+    mint: string,
+    deps: { callRpc?: <T>(rpcUrl: string, method: string, params: any[]) => Promise<T> } = {}
+  ): Promise<GateVerdict> {
+    const callRpcFn = deps.callRpc ?? callRpc;
     const steps: GateStepResult[] = [];
     const reasons: string[] = [];
     let passed = true;
@@ -146,7 +173,7 @@ export const SolanaRpc = {
 
     // Step 1: getAccountInfo with jsonParsed
     try {
-      const accountInfoRes = await callRpc<any>(config.rpcUrl, 'getAccountInfo', [
+      const accountInfoRes = await callRpcFn<any>(config.rpcUrl, 'getAccountInfo', [
         mint,
         { encoding: 'jsonParsed', commitment: 'confirmed' },
       ]);
@@ -240,8 +267,15 @@ export const SolanaRpc = {
       // Inspect Token-2022 extensions if present
       if (info.extensions && Array.isArray(info.extensions)) {
         for (const ext of info.extensions) {
-          const extType = ext.extension;
+          const extType = typeof ext?.extension === 'string' ? ext.extension.trim() : '';
           activeExtensions.push(extType);
+
+          // Fail-closed on unknown / unhandled Token-2022 extension types
+          if (!KNOWN_HANDLED_EXTENSIONS.has(extType)) {
+            passed = false;
+            reasons.push(`Token-2022 unknown/unhandled extension: ${extType}`);
+            continue;
+          }
 
           if (extType === 'permanentDelegate' && hasNonEmptyAuthority(ext.state?.delegate)) {
             passed = false;
@@ -314,7 +348,7 @@ export const SolanaRpc = {
     // Step 2: Supply & Top Wallets Concentration Gate
     try {
       // 2a. Supply
-      const supplyRes = await callRpc<any>(config.rpcUrl, 'getTokenSupply', [mint, { commitment: 'confirmed' }]);
+      const supplyRes = await callRpcFn<any>(config.rpcUrl, 'getTokenSupply', [mint, { commitment: 'confirmed' }]);
       const rawSupply = supplyRes?.value?.amount;
       const decimals = supplyRes?.value?.decimals ?? 6;
       totalSupply = parseFloat(rawSupply) / Math.pow(10, decimals);
@@ -336,16 +370,20 @@ export const SolanaRpc = {
       }
 
       // 2b. Largest Accounts
-      const largestRes = await callRpc<any>(config.rpcUrl, 'getTokenLargestAccounts', [
+      const largestRes = await callRpcFn<any>(config.rpcUrl, 'getTokenLargestAccounts', [
         mint,
         { commitment: 'confirmed' },
       ]);
       const largestList: { address: string; amount: string; decimals: number }[] = (largestRes?.value || []).slice(0, 20);
 
-      if (largestList.length > 0 && totalSupply > 0) {
+      if (largestList.length === 0) {
+        throw new Error('No largest-account data');
+      }
+
+      if (totalSupply > 0) {
         // Query token accounts to find parsed owner pubkeys
         const pubkeys = largestList.map(a => a.address);
-        const multiRes = await callRpc<any>(config.rpcUrl, 'getMultipleAccounts', [
+        const multiRes = await callRpcFn<any>(config.rpcUrl, 'getMultipleAccounts', [
           pubkeys,
           { encoding: 'jsonParsed', commitment: 'confirmed' },
         ]);
@@ -354,24 +392,31 @@ export const SolanaRpc = {
         const owners = accounts.map((a: any) => {
           return a?.data?.parsed?.info?.owner || null;
         });
-        const ownerKeys: string[] = [...new Set(owners.filter(Boolean))];
+
+        if (owners.length === 0 || owners.some((o: any) => !o)) {
+          throw new Error('Unparseable holder owner');
+        }
+
+        const ownerKeys: string[] = Array.from(new Set(owners as string[]));
 
         // Query owner account program owners to distinguish system wallets from program PDAs / vaults
         const ownerInfoRes = ownerKeys.length > 0
-          ? await callRpc<any>(config.rpcUrl, 'getMultipleAccounts', [
+          ? await callRpcFn<any>(config.rpcUrl, 'getMultipleAccounts', [
               ownerKeys,
               { encoding: 'base64', dataSlice: { offset: 0, length: 0 }, commitment: 'confirmed' },
             ])
           : { value: [] };
         const ownerInfo = ownerInfoRes?.value || [];
 
-        const isWallet = new Map<string, boolean>(
+        // F4 owner decision: only exclude holders whose owner is in KNOWN_AMM_PROGRAMS or whose owner account is owned by a KNOWN_AMM program; other non-system-owned holders count toward concentration.
+        const isExcluded = new Map<string, boolean>(
           ownerKeys.map((k, idx) => {
-            if (KNOWN_AMM_PROGRAMS.has(k)) return [k, false];
+            if (KNOWN_AMM_PROGRAMS.has(k)) return [k, true];
             const acct = ownerInfo[idx];
-            // null account info represents an unfunded system address (wallet), not a program PDA
-            const isSystemWallet = acct === null || acct === undefined || acct?.owner === '11111111111111111111111111111111';
-            return [k, isSystemWallet && !KNOWN_AMM_PROGRAMS.has(acct?.owner)];
+            if (acct && KNOWN_AMM_PROGRAMS.has(acct.owner)) {
+              return [k, true];
+            }
+            return [k, false];
           })
         );
 
@@ -379,8 +424,8 @@ export const SolanaRpc = {
         for (let i = 0; i < largestList.length; i++) {
           const item = largestList[i];
           const owner = owners[i];
-          if (!owner || isWallet.get(owner) !== true) {
-            continue; // Exclude AMM vaults, liquidity pools, and PDAs
+          if (!owner || isExcluded.get(owner) === true) {
+            continue; // Exclude AMM vaults and liquidity pools
           }
           const itemBal = parseFloat(item.amount) / Math.pow(10, item.decimals || decimals);
           if (Number.isFinite(itemBal) && itemBal > 0) {

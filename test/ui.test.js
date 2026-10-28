@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
+import { createServer, request } from "node:http";
 import { createUiHandler } from "../src/ui.js";
 
 function startEphemeralServer(handler) {
@@ -172,6 +172,90 @@ test("UI server serves mobile command center HTML, APK download, and secret-safe
     // ZIP/APK magic header 'PK' (0x50, 0x4b)
     assert.equal(apkBytes[0], 0x50);
     assert.equal(apkBytes[1], 0x4b);
+
+    // 7) F5 regressions: Origin check, Host header check, and https-only proxy targets
+    // 7a) Origin http://localhost:9999 with mismatched Host -> 403
+    const mismatchedOriginRes = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://localhost:9999",
+      },
+      body: JSON.stringify({
+        url: "https://sniper-relay.example.workers.dev/export-kv",
+        method: "GET",
+      }),
+    });
+    assert.equal(mismatchedOriginRes.status, 403);
+
+    // 7b) https origin -> 403
+    const httpsOriginRes = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://127.0.0.1",
+      },
+      body: JSON.stringify({
+        url: "https://sniper-relay.example.workers.dev/export-kv",
+        method: "GET",
+      }),
+    });
+    assert.equal(httpsOriginRes.status, 403);
+
+    // Helper to send raw HTTP requests with custom forbidden headers like Host
+    const sendRaw = (options, body = null) =>
+      new Promise((resolve, reject) => {
+        const req = request(options, (res) => {
+          let data = "";
+          res.on("data", (chunk) => (data += chunk));
+          res.on("end", () => resolve({ status: res.statusCode, body: data }));
+        });
+        req.on("error", reject);
+        if (body) req.write(body);
+        req.end();
+      });
+
+    const parsedPort = Number(new URL(baseUrl).port);
+
+    // 7c) Bad Host header on /api/status -> 403
+    const badHostStatusRes = await sendRaw({
+      hostname: "127.0.0.1",
+      port: parsedPort,
+      path: "/api/status",
+      method: "GET",
+      headers: { host: "evil.attacker.com" },
+    });
+    assert.equal(badHostStatusRes.status, 403);
+
+    // 7d) Bad Host header on /api/proxy -> 403
+    const badHostProxyRes = await sendRaw(
+      {
+        hostname: "127.0.0.1",
+        port: parsedPort,
+        path: "/api/proxy",
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          host: "evil.attacker.com",
+        },
+      },
+      JSON.stringify({
+        url: "https://sniper-relay.example.workers.dev/export-kv",
+        method: "GET",
+      }),
+    );
+    assert.equal(badHostProxyRes.status, 403);
+
+    // 7e) http:// worker target -> 403
+    const httpWorkerTargetRes = await fetch(`${baseUrl}/api/proxy`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "http://sniper-relay.example.workers.dev/export-kv",
+        method: "GET",
+      }),
+    });
+    assert.equal(httpWorkerTargetRes.status, 403);
   } finally {
     await close();
   }

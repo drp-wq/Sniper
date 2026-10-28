@@ -66,7 +66,7 @@ export function createUiHandler(deps = {}) {
       } catch {
         return null;
       }
-      if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+      if (u.protocol !== "https:") return null;
       if (u.username || u.password) return null;
 
       const hostname = u.hostname.toLowerCase();
@@ -106,6 +106,11 @@ export function createUiHandler(deps = {}) {
     }
 
     if (path === "/api/status" && req.method === "GET") {
+      const host = String(req.headers.host || "");
+      if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) {
+        return sendJson(res, 403, { error: "forbidden host header" });
+      }
+
       let openPositions = [];
       let archivedPositions = [];
       let events = [];
@@ -141,6 +146,11 @@ export function createUiHandler(deps = {}) {
     }
 
     if (path === "/api/proxy") {
+      const host = String(req.headers.host || "");
+      if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) {
+        return sendJson(res, 403, { error: "forbidden host header" });
+      }
+
       // Reject untrusted cross-origin requests
       const secFetchSite = req.headers["sec-fetch-site"];
       if (secFetchSite === "cross-site") {
@@ -150,7 +160,8 @@ export function createUiHandler(deps = {}) {
       if (origin) {
         try {
           const o = new URL(origin);
-          const isLocal = (o.hostname === "127.0.0.1" || o.hostname === "localhost");
+          const isLocal = o.protocol === "http:" && o.host === host &&
+            /^(127\.0\.0\.1|localhost):\d+$/.test(host);
           if (!isLocal) {
             return sendJson(res, 403, { error: "cross-origin requests forbidden" });
           }

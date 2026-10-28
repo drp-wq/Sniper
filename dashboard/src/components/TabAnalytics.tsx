@@ -71,7 +71,7 @@ export const TabAnalytics: React.FC = () => {
 
   // Export handlers
   const handleExportJsonl = () => {
-    const closed = engine.getClosedTrades();
+    const closed = engine.getClosedTrades().filter(t => !t.simulated);
     const content = StorageService.exportPaperJsonl(closed);
     const blob = new Blob([content], { type: 'application/x-jsonlines' });
     const url = URL.createObjectURL(blob);
@@ -83,7 +83,7 @@ export const TabAnalytics: React.FC = () => {
   };
 
   const handleExportPositionsJson = () => {
-    const open = engine.getOpenPositions();
+    const open = engine.getOpenPositions().filter(p => !p.simulated);
     const content = StorageService.exportPositionsJson(open);
     const blob = new Blob([content], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -107,7 +107,7 @@ export const TabAnalytics: React.FC = () => {
       try {
         const imported = StorageService.importPaperJsonl(text);
         if (imported.length > 0) {
-          engine.loadBenchmarkTrades(imported);
+          engine.importClosedTrades(imported);
           setImportStatus(`Successfully loaded ${imported.length} trades from file.`);
         } else {
           setImportStatus('No valid closed trade records found in file.');

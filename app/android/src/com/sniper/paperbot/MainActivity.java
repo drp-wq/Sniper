@@ -77,6 +77,7 @@ public class MainActivity extends Activity {
             this.webView = webView;
         }
 
+        // Note: assertLocalContext() checks webView.getUrl() but does not prove caller frame/origin in multi-frame or navigation edge cases; a real fix needs WebViewAssetLoader + addWebMessageListener.
         private void assertLocalContext() {
             String currentUrl = webView.getUrl();
             if (currentUrl == null || !currentUrl.startsWith("file:///android_asset/")) {
@@ -84,11 +85,63 @@ public class MainActivity extends Activity {
             }
         }
 
+        private static boolean isInvalidHost(String host) {
+            if (host == null || host.trim().isEmpty()) return true;
+            String h = host.toLowerCase().trim();
+            if ("localhost".equals(h) || h.endsWith(".localhost") || "127.0.0.1".equals(h) ||
+                "169.254.169.254".equals(h) || "metadata.google.internal".equals(h)) {
+                return true;
+            }
+            if (h.contains(":") || h.startsWith("[") || h.endsWith("]")) {
+                return true;
+            }
+            if (h.matches("^(?:\\d+|0x[0-9a-fA-F]+|\\d+\\.\\d+\\.\\d+\\.\\d+|\\[.*\\])$")) {
+                return true;
+            }
+            return false;
+        }
+
+        private static boolean isValidHttpsUrl(String urlStr) {
+            if (urlStr == null || urlStr.trim().isEmpty()) return false;
+            try {
+                URL u = new URL(urlStr.trim());
+                if (!"https".equalsIgnoreCase(u.getProtocol())) return false;
+                if (u.getUserInfo() != null) return false;
+                int port = u.getPort();
+                if (port != -1 && port != 443) return false;
+                String host = u.getHost();
+                if (host == null || isInvalidHost(host)) return false;
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
         @JavascriptInterface
         public void saveConfig(String json) {
             assertLocalContext();
-            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
-            prefs.edit().putString(KEY_CFG, json != null ? json : "").apply();
+            if (json == null || json.trim().isEmpty()) {
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().putString(KEY_CFG, "").apply();
+                return;
+            }
+            try {
+                JSONObject cfg = new JSONObject(json);
+                if (cfg.has("workerUrl")) {
+                    String wUrl = cfg.optString("workerUrl", "");
+                    if (!wUrl.isEmpty() && !isValidHttpsUrl(wUrl)) {
+                        cfg.remove("workerUrl");
+                    }
+                }
+                if (cfg.has("rpcUrl")) {
+                    String rUrl = cfg.optString("rpcUrl", "");
+                    if (!rUrl.isEmpty() && !isValidHttpsUrl(rUrl)) {
+                        cfg.remove("rpcUrl");
+                    }
+                }
+                SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+                prefs.edit().putString(KEY_CFG, cfg.toString()).apply();
+            } catch (Exception ignored) {}
         }
 
         @JavascriptInterface
@@ -129,6 +182,9 @@ public class MainActivity extends Activity {
                     throw new SecurityException("Non-standard HTTPS port not permitted: " + port);
                 }
                 String host = url.getHost() != null ? url.getHost().toLowerCase() : "";
+                if (isInvalidHost(host)) {
+                    throw new SecurityException("Invalid target host: " + host);
+                }
 
                 // Dynamically resolve configured Worker and RPC hosts from local SharedPreferences
                 String configuredWorkerHost = "";
@@ -140,8 +196,8 @@ public class MainActivity extends Activity {
                         JSONObject cfg = new JSONObject(rawCfg);
                         String wUrl = cfg.optString("workerUrl", "");
                         String rUrl = cfg.optString("rpcUrl", "");
-                        if (!wUrl.isEmpty()) configuredWorkerHost = new URL(wUrl).getHost().toLowerCase();
-                        if (!rUrl.isEmpty()) configuredRpcHost = new URL(rUrl).getHost().toLowerCase();
+                        if (!wUrl.isEmpty() && isValidHttpsUrl(wUrl)) configuredWorkerHost = new URL(wUrl).getHost().toLowerCase();
+                        if (!rUrl.isEmpty() && isValidHttpsUrl(rUrl)) configuredRpcHost = new URL(rUrl).getHost().toLowerCase();
                     }
                 } catch (Exception ignored) {}
 
@@ -170,9 +226,12 @@ public class MainActivity extends Activity {
                     Iterator<String> keys = headersObj.keys();
                     while (keys.hasNext()) {
                         String k = keys.next();
-                        String v = headersObj.optString(k, "");
-                        if (!v.isEmpty()) {
-                            conn.setRequestProperty(k, v);
+                        String lowerK = k.toLowerCase().trim();
+                        if ("content-type".equals(lowerK) || "accept".equals(lowerK) || "x-key".equals(lowerK)) {
+                            String v = headersObj.optString(k, "");
+                            if (!v.isEmpty()) {
+                                conn.setRequestProperty(k, v);
+                            }
                         }
                     }
                 }
@@ -198,7 +257,13 @@ public class MainActivity extends Activity {
                     try (InputStream in = is; ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
                         byte[] buf = new byte[4096];
                         int n;
+                        int totalBytes = 0;
+                        final int MAX_RESPONSE_BYTES = 1024 * 1024; // 1 MB cap
                         while ((n = in.read(buf)) != -1) {
+                            totalBytes += n;
+                            if (totalBytes > MAX_RESPONSE_BYTES) {
+                                throw new SecurityException("Response size exceeds 1 MB limit");
+                            }
                             bos.write(buf, 0, n);
                         }
                         respText = bos.toString("UTF-8");
@@ -215,7 +280,7 @@ public class MainActivity extends Activity {
                     JSONObject err = new JSONObject();
                     err.put("ok", false);
                     err.put("status", 0);
-                    err.put("error", e.getMessage() != null ? e.getMessage() : e.toString());
+                    err.put("error", "bridge_http_request_failed");
                     return err.toString();
                 } catch (Exception ignored) {
                     return "{\"ok\":false,\"status\":0,\"error\":\"bridge_exception\"}";

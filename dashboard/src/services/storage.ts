@@ -4,7 +4,7 @@
  * Enforces key masking and clean data integrity.
  */
 
-import { AppConfig, ClosedTrade, PaperPosition, SignalLogItem } from '../types';
+import type { AppConfig, ClosedTrade, PaperPosition, SignalLogItem } from '../types/index.ts';
 
 const STORAGE_KEYS = {
   CONFIG: 'sniper_app_config_v1',
@@ -180,10 +180,10 @@ export const StorageService = {
 
   exportPaperJsonl(trades: ClosedTrade[]): string {
     return trades
+      .filter(t => !t.simulated)
       .map(t =>
         JSON.stringify({
           ev: 'paper_close',
-          mint: t.mint,
           pnl: t.pnlPct1x,
           pnl2xSlip: t.pnlPct2x,
           heldSec: t.holdSeconds,
@@ -195,7 +195,7 @@ export const StorageService = {
   },
 
   exportPositionsJson(positions: PaperPosition[]): string {
-    return JSON.stringify(positions, null, 2);
+    return JSON.stringify(positions.filter(p => !p.simulated), null, 2);
   },
 
   importPaperJsonl(jsonlText: string): ClosedTrade[] {

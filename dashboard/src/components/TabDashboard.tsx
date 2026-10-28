@@ -19,12 +19,10 @@ import {
   Zap,
   ShieldCheck,
   Percent,
-  Database,
   ArrowUpRight,
   Flame,
 } from 'lucide-react';
 import { engine } from '../services/engine';
-import { generateBenchmarkTrades } from '../services/sampleData';
 
 interface TabDashboardProps {
   onNavigateToTab: (tab: any) => void;
@@ -41,11 +39,6 @@ export const TabDashboard: React.FC<TabDashboardProps> = ({ onNavigateToTab }) =
 
   const closedTarget = 200;
   const closedProgress = Math.min(100, (stats.closedCount / closedTarget) * 100);
-
-  const handleLoadBenchmark = () => {
-    const sample = generateBenchmarkTrades(200);
-    engine.loadBenchmarkTrades(sample);
-  };
 
   return (
     <div className="space-y-4 pb-20">
@@ -144,17 +137,6 @@ export const TabDashboard: React.FC<TabDashboardProps> = ({ onNavigateToTab }) =
               <Zap className="w-3.5 h-3.5" />
               <span>Simulate Signal</span>
             </button>
-
-            {stats.closedCount < 200 && (
-              <button
-                onClick={handleLoadBenchmark}
-                className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 text-xs font-mono transition-all cursor-pointer"
-                title="Populate 200 realistic benchmark trades to evaluate the gate"
-              >
-                <Database className="w-3.5 h-3.5" />
-                <span>Load 200 Benchmark</span>
-              </button>
-            )}
           </div>
         </div>
 

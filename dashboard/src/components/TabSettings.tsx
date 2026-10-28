@@ -269,7 +269,7 @@ export const TabSettings: React.FC = () => {
               type="text"
               value={form.workerUrl}
               onChange={e => setForm({ ...form, workerUrl: e.target.value })}
-              placeholder="https://sniper-relay.pjdebnath01.workers.dev"
+              placeholder="https://sniper-relay.example.workers.dev"
               className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-white text-xs focus:outline-none focus:border-emerald-500 font-mono"
             />
             <div className="text-[10px] text-zinc-500 mt-1">

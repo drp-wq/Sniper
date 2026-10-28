@@ -7,7 +7,7 @@ ASSETS_DIR="$ROOT_DIR/app/assets"
 
 cd "$DASH_DIR"
 if [ ! -d "node_modules" ]; then
-  npm install --legacy-peer-deps
+  npm ci
 fi
 
 npm run build

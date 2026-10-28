@@ -1,5 +1,10 @@
 # SNIPER — PHASE 1 SECURITY & RELIABILITY AUDIT REPORT
 
+> [!NOTE]
+> **AUDIT REPORT STATUS BANNER (HISTORICAL CONTEXT)**
+> The Phase 1 Executive Summary, the "35 tests" baseline metric, git commit baseline `27d30ef`, and the original "NO-GO" verdict below are **HISTORICAL** records of the initial audit state prior to subsequent owner-approved fixes F1–F9.
+> See Section 13 for current remediation status, verification logs, and known operational boundaries.
+
 > **Mode**: Strictly Read-Only Audit (`REPORT FIRST, NO CODE CHANGES`)
 > **Repository**: `https://github.com/drp-wq/Sniper`
 > **Evaluated Branch / Commit**: `main` @ `15cf45c6ecd7dc008de8fd20a59b1fab509133cd` (code baseline identical to `27d30ef30e63ea62d66fa99a1c09fba6a00f3671`)
@@ -1255,9 +1260,32 @@ Phase 1 fixes were committed in `9fa0c32` and verified:
 
 ---
 
-## 13. Explicit Confirmation Statement
+## 13. Current Remediation Status & Verification (Fixes F1–F9)
 
-All P0, P1, and P2 findings identified across the audit report have been fully remediated and verified. The full test suite passes with 37/37 tests.
+The owner-approved fixes F1–F9 have been implemented and verified as follows:
+
+### Summary of Fixes F1–F9
+- **F1 (Stale shipped bundle & CI freshness guard)**: Added dashboard bundle build and `git diff --exit-code -- app/assets` freshness check to `.github/workflows/android-apk.yml`. Updated `scripts/build-dashboard.sh` to use `npm ci`. Regenerated `app/assets/app.js` and `styles.css` locally, verifying presence of `openingMints`, `missingSince`, `archivedUnresolved`, and `isTicking`, and confirming removal of `pjdebnath01.workers.dev`.
+- **F2 (Synthetic trades & benchmark removal)**: Removed `generateBenchmarkTrades`, `handleLoadBenchmark`, and the "Load 200 Benchmark" button from `TabDashboard.tsx`. Deleted `loadBenchmarkTrades` in `engine.ts` and `generateBenchmarkTrades` in `sampleData.ts` (keeping `SAMPLE_TEST_MINTS`). Added `simulated?: boolean` to `WorkerSignal`, `PaperPosition`, and `ClosedTrade`. Excluded simulated trades from `getStats()` metrics/gate and from JSON/JSONL exports.
+- **F3 (tickPrices race remediation)**: In `engine.ts` `tickPrices()`, shallow-copied `this.openPositions` for iteration (`[...this.openPositions]`), added post-await check `if (!this.openPositions.some(p => p.id === pos.id)) continue;`, and eliminated `positionsToKeep` array reassignments.
+- **F4 (Fail-closed holder gate)**: In `solanaRpc.ts`, threw an explicit error on empty `largestList` or null `owners` (triggering fail-closed `passed = false`). Added strict Token-2022 extension allowlist rejecting unhandled extensions. Implemented holder concentration rule excluding only accounts owned by `KNOWN_AMM_PROGRAMS` or accounts whose program owner is in `KNOWN_AMM_PROGRAMS` (non-system accounts not in KNOWN_AMM count toward concentration).
+- **F5 (Origin and Host header validation in UI server)**: In `src/ui.js`, enforced Host header regex validation `/^(127\.0\.0\.1|localhost):\d+$/` on `/api/status` and `/api/proxy`. Enforced Origin protocol `http:`, host matching `req.headers.host`, and local host matching. Restricted `validateProxyTarget` strictly to `https:` protocol.
+- **F6 (Android native bridge hardening)**: In `MainActivity.java`, validated `workerUrl` and `rpcUrl` in `saveConfig` (must be https, port -1/443, no userinfo, non-IP literal/localhost). In `httpRequest`, added host validation, restricted header forwarding to `content-type`, `accept`, and `x-key` (case-insensitive), capped response stream read at 1 MB, and returned generic error messages without exposing exception details. Added comment regarding `WebViewAssetLoader` and `addWebMessageListener`.
+- **F7 (Half-banked double slip tracking parity)**: In `engine.ts` `tickPrices()` Rule A, recorded `pos.halfRawPrice = quote.priceUsd;` upon banking 50% TP, ensuring `closedTrade.pnlPct2x` matches `src/paper.js:computeDoubleSlipPnl`.
+- **F8 (DexScreener case-sensitivity and unpinned fallback rejection)**: In `dexScreener.ts`, compared mint addresses case-sensitively (`baseToken.address === mint`). If `preferredPair` is specified and not present, logged a warning and returned `null` instead of falling back to another pair.
+- **F9 (Report status banner & accurate remediation state)**: Added historical status banner to `report.md` and updated Section 13 with verified fix inventory, commands run, and known limits.
+
+### Verification Performed
+- **Automated Regression Test Suite**: Ran `node --test` (Node v24.21.0) -> **42 passing tests, 0 failing, 0 skipped** (37 baseline tests + 5 comprehensive regression tests for F2, F3, F4, F5, F7, F8).
+- **Dashboard Typecheck / Lint**: Ran `npm --prefix dashboard run lint` (`tsc --noEmit`) -> **0 errors, exit code 0**.
+- **Dashboard Build & Determinism**: Ran `npm run build:dashboard` -> built `app/assets/app.js` and confirmed byte-for-byte identical output across consecutive runs (`cmp -s`).
+- **Bundle Content Verification**: Confirmed `app/assets/app.js` contains `openingMints`, `missingSince`, `archivedUnresolved`, `isTicking` and contains no occurrences of `pjdebnath01.workers.dev`.
+
+### Known Limits & Scope Boundaries
+- **No Device Test of Android Bridge**: Native Android bridge changes in `MainActivity.java` have not been tested on a physical Android device or emulator.
+- **Android APK Not Rebuilt Locally**: `sniper-paper-bot.apk` was deliberately not rebuilt or replaced locally (Android SDK platform tools not present in environment; build is deferred to owner / CI).
+- **No Browser / Capacitor Unit Test Runner**: Unit tests exercise headless Node.js CLI, server, and service modules via `node --test`; browser DOM integration and UI rendering were not tested in an automated headless browser.
+- **CI Workflow Execution Not Independently Verified**: GitHub Actions CI workflow changes (`.github/workflows/android-apk.yml`) were verified locally by inspecting YAML syntax and running the corresponding bash commands, but not executed on GitHub Actions infrastructure.
 
 
 

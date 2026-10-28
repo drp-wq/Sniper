@@ -4,7 +4,7 @@
  * Endpoint: GET https://api.dexscreener.com/latest/dex/tokens/{mint}
  */
 
-import { DexQuote } from '../types';
+import type { DexQuote } from '../types/index.ts';
 
 interface DexScreenerPair {
   chainId: string;
@@ -78,9 +78,9 @@ export const DexScreenerService = {
         return null;
       }
 
-      // Filter pairs matching Solana network and this mint as baseToken
+      // Filter pairs matching Solana network and this mint as baseToken (case-sensitive)
       const solPairs = data.pairs.filter(
-        p => p.chainId === 'solana' && p.baseToken.address.toLowerCase() === mint.toLowerCase()
+        p => p.chainId === 'solana' && p.baseToken && p.baseToken.address === mint
       );
 
       if (solPairs.length === 0) {
@@ -94,6 +94,9 @@ export const DexScreenerService = {
         const match = solPairs.find(p => p.pairAddress === preferredPair);
         if (match) {
           bestPair = match;
+        } else {
+          console.warn(`Preferred pair ${preferredPair} not found for mint ${mint}`);
+          return null;
         }
       }
 

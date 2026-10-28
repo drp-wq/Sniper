@@ -39,6 +39,7 @@ export interface WorkerSignal {
   sig: string;
   ts: number;
   chainTs?: number;
+  simulated?: boolean;
 }
 
 export interface SignalsResponse {
@@ -149,6 +150,7 @@ export interface PaperPosition {
   missingSince?: number;        // timestamp when missing quotes began
   halfRawPrice?: number;        // quote price when 50% TP was banked
   pairAddress?: string;         // pinned DexScreener pair address
+  simulated?: boolean;          // created via simulated signal
   
   // Time stop tracking
   enteredBandAt?: number;       // when it entered [-10%, +15%] band
@@ -178,6 +180,7 @@ export interface ClosedTrade {
   exitReason: ExitReason;
   tookHalf: boolean;
   bankedUsd: number;
+  simulated?: boolean;
   
   // 1x Slippage (Standard 5% entry, 8% exit)
   pnlPct1x: number;
