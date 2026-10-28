@@ -146,6 +146,9 @@ export interface PaperPosition {
   trailingArmed: boolean;       // armed at >= +50%
   missedQuoteTicks: number;     // incremented if DexScreener returns no quote
   isUnresolved: boolean;        // flagged after 12 missed ticks
+  missingSince?: number;        // timestamp when missing quotes began
+  halfRawPrice?: number;        // quote price when 50% TP was banked
+  pairAddress?: string;         // pinned DexScreener pair address
   
   // Time stop tracking
   enteredBandAt?: number;       // when it entered [-10%, +15%] band

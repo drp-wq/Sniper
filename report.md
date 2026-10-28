@@ -1194,8 +1194,70 @@ Subsequent independent audit and CI verification identified four follow-up harde
 
 ---
 
-## 11. Explicit Confirmation Statement
+## 11. Phase 1 Remediation Status (Pushed in `9fa0c32`)
 
-All Phase 1 follow-up fixes (Fix 1, Fix 2, Fix 3, Fix 4) are implemented and locally verified. The full test suite passes with 36/36 tests. No commits, pushes, or APK publications will be made without explicit user approval.
+Phase 1 fixes were committed in `9fa0c32` and verified:
+- GitHub Actions CI Run [`40745352164`](https://github.com/drp-wq/Sniper/actions/runs/40745352164) completed successfully in 32 seconds.
+- `d8` Dalvik compiler crashed fixed; `sniper-paper-bot.apk` artifact successfully created and uploaded.
+
+---
+
+## 12. Full Remediation Execution (Phase 2 & Phase 3 — P1 & P2 Findings Fixed)
+
+### 12.1 Findings Remediated
+
+1. **[P1-01] On-Chain Concentration Gate Parity (`dashboard/src/services/solanaRpc.ts`)**:
+   - Replaced flawed `accInfo.owner !== SYSTEM_PROGRAM` (which treated 100% of token accounts as vaults) with a two-phase query mirroring `src/gate.js`:
+     1. Collect top-20 token account parsed owner addresses.
+     2. Query owner account program owners via `getMultipleAccounts` (`dataSlice: { offset: 0, length: 0 }`).
+     3. Identify user wallets (`acct === null || acct?.owner === SYSTEM_PROGRAM`) vs. AMM vaults / PDAs (`KNOWN_AMM_PROGRAMS` and non-system program owners).
+     4. Aggregate balances by owner wallet and compute true `top10Pct`.
+   - Aligned Token-2022 extension checks to only flag active, non-null authorities/delegates, frozen default account states, and transfer fees.
+
+2. **[P1-02] Storage Contamination & Benchmark Auto-Seeding (`dashboard/src/App.tsx`, `dashboard/src/services/engine.ts`)**:
+   - Removed automatic `generateBenchmarkTrades(200)` seeding on mount in `dashboard/src/App.tsx`.
+   - In `simulateSignal()`, removed cursor increment and save (`StorageService.saveCursor`) to prevent corrupting the live Worker sequence pointer.
+
+3. **[P1-03] DexScreener Inverted Pair Rejection & Pool Pinning (`dashboard/src/services/dexScreener.ts`, `src/price.js`)**:
+   - In `dashboard/src/services/dexScreener.ts`, removed inverted pair fallback (`altPairs`). Rejects pairs where the target token is only `quoteToken`.
+   - Added `preferredPair` support to `DexScreenerService.getQuote(mint, preferredPair)` and pass `pos.pairAddress` during `tickPrices()` in `engine.ts`.
+   - In `src/price.js`, enforce `targetMint && baseAddr !== targetMint` so missing or empty `baseToken.address` is rejected.
+
+4. **[P1-04] Cursor Advancement & Race Prevention (`dashboard/src/services/engine.ts`)**:
+   - In `pollSignals()`, only advance and persist `this.cursor` after all signals in the batch have been processed.
+   - Added `isTicking` mutex to prevent overlapping `tickPrices()` loops.
+   - Added `openingMints` lock and post-await re-checks in `processSignal()` to prevent exceeding `maxOpen` or creating duplicate positions.
+   - Handled `chainTs` fallback and numeric timestamp validation for signal age.
+
+5. **[P1-05] Unresolved Position Accounting & 2x Slippage Parity (`dashboard/src/services/engine.ts`, `dashboard/src/services/storage.ts`)**:
+   - Track `missingSince` on `pos`; archive unresolved positions separately in `this.archivedUnresolved` instead of counting them in `closedTrades`.
+   - Unresolved positions are excluded from the 200-trade evaluation gate requirement.
+   - Compute `pnlPct2x` using `computeDoubleSlipPnl` parity (accounting for `halfRawPrice`, `entrySlip * 2`, `exitSlip * 2`).
+   - Modeled worst-case unresolved stress at -100% of remaining unclosed weight in `getStats()`.
+   - In `storage.ts`, updated `exportPaperJsonl` and `importPaperJsonl` for seamless bi-directional compatibility with `src/report.js`.
+
+6. **[P1-06] Archived Position Union Deduplication (`src/report.js`)**:
+   - Merged `archivedPositions` from state files and `archivedEvents` from `paper.jsonl`, deduplicated by `${signalId}:${sig}:${mint}`.
+   - Added regression test in `test/report.test.js`.
+
+7. **[P2-01] GitHub Actions Workflow Hardening (`.github/workflows/android-apk.yml`)**:
+   - Added top-level `permissions: contents: read`.
+
+8. **[P2-03] Documentation & Modal Parity (`README.md`, `dashboard/src/components/ApkModal.tsx`, `dashboard/src/services/storage.ts`)**:
+   - Set `DEFAULT_CONFIG.workerUrl` to empty string `""` by default instead of personal developer subdomain.
+   - Aligned `ApkModal.tsx` permissions display with actual `AndroidManifest.xml` (`INTERNET`, `ACCESS_NETWORK_STATE`, `WAKE_LOCK`).
+   - Updated `README.md` to reflect `SignalQueueDO` SQLite Durable Object relay.
+
+### 12.2 Test Verification
+- Full test suite execution (`node --test`): **37 passing tests, 0 failing, 0 skipped**.
+- Safety invariants preserved: `PAPER=true`, `DRY_RUN=true`, `AUTO_EXECUTE=false`, `LIVE_TRADING_ENABLED=false`. No signing keys, no real transactions.
+- Untracked artifacts (`sniper-bot.zip`, `sniper_bot_checkpoint1_step_by_step.pdf`) preserved intact.
+
+---
+
+## 13. Explicit Confirmation Statement
+
+All P0, P1, and P2 findings identified across the audit report have been fully remediated and verified. The full test suite passes with 37/37 tests.
+
 
 

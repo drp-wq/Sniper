@@ -49,10 +49,10 @@ interface DexScreenerResponse {
 export const DexScreenerService = {
   /**
    * Fetch quote for a given mint.
-   * Filters for chainId === "solana" and baseToken.address === mint,
-   * sorted by highest liquidity.usd.
+   * Filters strictly for chainId === "solana" and baseToken.address === mint,
+   * sorted by highest liquidity.usd (or pinned to preferredPair if active).
    */
-  async getQuote(mint: string): Promise<DexQuote | null> {
+  async getQuote(mint: string, preferredPair?: string): Promise<DexQuote | null> {
     const url = `https://api.dexscreener.com/latest/dex/tokens/${mint}`;
     try {
       let data: DexScreenerResponse | null = null;
@@ -84,15 +84,18 @@ export const DexScreenerService = {
       );
 
       if (solPairs.length === 0) {
-        // Fallback to any solana pair with this token in case of casing differences
-        const altPairs = data.pairs.filter(p => p.chainId === 'solana');
-        if (altPairs.length === 0) return null;
-        solPairs.push(...altPairs);
+        return null;
       }
 
       // Sort by highest liquidity.usd
       solPairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0));
-      const bestPair = solPairs[0];
+      let bestPair = solPairs[0];
+      if (preferredPair) {
+        const match = solPairs.find(p => p.pairAddress === preferredPair);
+        if (match) {
+          bestPair = match;
+        }
+      }
 
       const priceUsd = parseFloat(bestPair.priceUsd) || 0;
       const liqUsd = bestPair.liquidity?.usd || 0;

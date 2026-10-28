@@ -32,6 +32,12 @@ const KNOWN_AMM_PROGRAMS = new Set([
   'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo', // Meteora Dynamic AMM
 ]);
 
+function hasNonEmptyAuthority(auth: any): boolean {
+  if (!auth) return false;
+  const s = String(auth).trim();
+  return s.length > 0 && s !== '11111111111111111111111111111111';
+}
+
 async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promise<T> {
   const payload = {
     jsonrpc: '2.0',
@@ -237,31 +243,46 @@ export const SolanaRpc = {
           const extType = ext.extension;
           activeExtensions.push(extType);
 
-          if (extType === 'permanentDelegate') {
+          if (extType === 'permanentDelegate' && hasNonEmptyAuthority(ext.state?.delegate)) {
             passed = false;
             reasons.push('Token-2022 permanent delegate extension active (can seize tokens)');
-          } else if (extType === 'transferHook') {
+          } else if (
+            extType === 'transferHook' &&
+            (hasNonEmptyAuthority(ext.state?.programId) || hasNonEmptyAuthority(ext.state?.authority))
+          ) {
             passed = false;
             reasons.push('Token-2022 transfer hook active (can block or tax transfers)');
           } else if (extType === 'transferFeeConfig') {
-            const feeBps = ext.state?.newerTransferFee?.transferFeeBasisPoints ?? ext.state?.transferFeeBasisPoints ?? 0;
-            const feeAuth = ext.state?.transferFeeConfigAuthority;
-            if (feeBps > 0 || (feeAuth && feeAuth !== '11111111111111111111111111111111')) {
+            const olderBps = Number(ext.state?.olderTransferFee?.transferFeeBasisPoints ?? 0);
+            const newerBps = Number(ext.state?.newerTransferFee?.transferFeeBasisPoints ?? ext.state?.transferFeeBasisPoints ?? 0);
+            if (
+              (Number.isFinite(olderBps) && olderBps > 0) ||
+              (Number.isFinite(newerBps) && newerBps > 0) ||
+              hasNonEmptyAuthority(ext.state?.transferFeeConfigAuthority) ||
+              hasNonEmptyAuthority(ext.state?.withdrawWithheldAuthority)
+            ) {
               passed = false;
-              reasons.push(`Token-2022 transfer fee active (${feeBps} bps / authority active)`);
+              reasons.push(`Token-2022 transfer fee active (${newerBps || olderBps} bps / authority active)`);
             }
           } else if (extType === 'defaultAccountState') {
-            if (ext.state?.accountState === 'frozen' || ext.state?.accountState === 2) {
+            const acctState = String(ext.state?.state ?? ext.state?.accountState ?? '').trim().toLowerCase();
+            if (acctState === 'frozen' || acctState === '2') {
               passed = false;
               reasons.push('Token-2022 default account state is frozen');
             }
           } else if (extType === 'nonTransferable') {
             passed = false;
             reasons.push('Token-2022 non-transferable extension active (soulbound)');
-          } else if (extType === 'mintCloseAuthority') {
+          } else if (
+            (extType === 'mintCloseAuthority' || extType === 'closeAuthority') &&
+            hasNonEmptyAuthority(ext.state?.closeAuthority)
+          ) {
             passed = false;
             reasons.push('Token-2022 mint close authority active');
-          } else if (extType === 'pausableConfig') {
+          } else if (
+            (extType === 'pausable' || extType === 'pausableConfig') &&
+            (Boolean(ext.state?.paused) || hasNonEmptyAuthority(ext.state?.authority))
+          ) {
             passed = false;
             reasons.push('Token-2022 pausable configuration active');
           }
@@ -319,47 +340,52 @@ export const SolanaRpc = {
         mint,
         { commitment: 'confirmed' },
       ]);
-      const largestList: { address: string; amount: string; decimals: number }[] = largestRes?.value || [];
+      const largestList: { address: string; amount: string; decimals: number }[] = (largestRes?.value || []).slice(0, 20);
 
       if (largestList.length > 0 && totalSupply > 0) {
-        // Query account owners via getMultipleAccounts
-        const pubkeys = largestList.slice(0, 20).map(a => a.address);
+        // Query token accounts to find parsed owner pubkeys
+        const pubkeys = largestList.map(a => a.address);
         const multiRes = await callRpc<any>(config.rpcUrl, 'getMultipleAccounts', [
           pubkeys,
           { encoding: 'jsonParsed', commitment: 'confirmed' },
         ]);
-
         const accounts = multiRes?.value || [];
-        const walletBalances: Map<string, number> = new Map();
 
+        const owners = accounts.map((a: any) => {
+          return a?.data?.parsed?.info?.owner || null;
+        });
+        const ownerKeys: string[] = [...new Set(owners.filter(Boolean))];
+
+        // Query owner account program owners to distinguish system wallets from program PDAs / vaults
+        const ownerInfoRes = ownerKeys.length > 0
+          ? await callRpc<any>(config.rpcUrl, 'getMultipleAccounts', [
+              ownerKeys,
+              { encoding: 'base64', dataSlice: { offset: 0, length: 0 }, commitment: 'confirmed' },
+            ])
+          : { value: [] };
+        const ownerInfo = ownerInfoRes?.value || [];
+
+        const isWallet = new Map<string, boolean>(
+          ownerKeys.map((k, idx) => {
+            if (KNOWN_AMM_PROGRAMS.has(k)) return [k, false];
+            const acct = ownerInfo[idx];
+            // null account info represents an unfunded system address (wallet), not a program PDA
+            const isSystemWallet = acct === null || acct === undefined || acct?.owner === '11111111111111111111111111111111';
+            return [k, isSystemWallet && !KNOWN_AMM_PROGRAMS.has(acct?.owner)];
+          })
+        );
+
+        const walletBalances: Map<string, number> = new Map();
         for (let i = 0; i < largestList.length; i++) {
           const item = largestList[i];
-          const accInfo = accounts[i];
-          const itemBal = parseFloat(item.amount) / Math.pow(10, item.decimals || decimals);
-
-          let ownerWallet = item.address; // fallback to account address
-          let isVault = false;
-
-          if (accInfo && accInfo.data?.parsed?.info) {
-            const parsedInfo = accInfo.data.parsed.info;
-            ownerWallet = parsedInfo.owner || item.address;
-
-            // Check if PDA / AMM program vault
-            // PDA check: account owner is not the system program ("11111111111111111111111111111111")
-            // Or known AMM programs
-            if (
-              (accInfo.owner && accInfo.owner !== '11111111111111111111111111111111') ||
-              KNOWN_AMM_PROGRAMS.has(ownerWallet) ||
-              KNOWN_AMM_PROGRAMS.has(accInfo.owner)
-            ) {
-              isVault = true;
-            }
+          const owner = owners[i];
+          if (!owner || isWallet.get(owner) !== true) {
+            continue; // Exclude AMM vaults, liquidity pools, and PDAs
           }
-
-          // If excluded as AMM vault / liquidity pool, skip aggregating into top holders
-          if (!isVault) {
-            const current = walletBalances.get(ownerWallet) || 0;
-            walletBalances.set(ownerWallet, current + itemBal);
+          const itemBal = parseFloat(item.amount) / Math.pow(10, item.decimals || decimals);
+          if (Number.isFinite(itemBal) && itemBal > 0) {
+            const current = walletBalances.get(owner) || 0;
+            walletBalances.set(owner, current + itemBal);
           }
         }
 

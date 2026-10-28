@@ -104,6 +104,9 @@ export class SniperEngine {
   private cursor: number = 0;
   private isLocalHalted: boolean = false;
   private isRemoteHalted: boolean = false;
+  private openingMints: Set<string> = new Set();
+  private isTicking: boolean = false;
+  private archivedUnresolved: PaperPosition[] = [];
 
   private isRunning: boolean = false;
   private pollTimer: any = null;
@@ -330,15 +333,24 @@ export class SniperEngine {
       this.sequenceGapDetected = false;
     }
 
-    if (seq > this.cursor) {
-      this.cursor = seq;
-      StorageService.saveCursor(this.cursor);
-    }
+    let maxProcessedId = this.cursor;
 
     if (signals && signals.length > 0) {
       for (const sig of signals) {
         await this.processSignal(sig);
+        if (typeof sig.id === 'number' && sig.id > maxProcessedId) {
+          maxProcessedId = sig.id;
+        }
       }
+    }
+
+    if (typeof seq === 'number' && seq > maxProcessedId) {
+      maxProcessedId = seq;
+    }
+
+    if (maxProcessedId > this.cursor) {
+      this.cursor = maxProcessedId;
+      StorageService.saveCursor(this.cursor);
     }
 
     this.notify();
@@ -349,8 +361,15 @@ export class SniperEngine {
    */
   public async processSignal(signal: WorkerSignal): Promise<SignalLogItem> {
     const now = Date.now();
-    const latencyMs = now - signal.ts;
     const MAX_SIGNAL_AGE_MS = 60000; // 60s max signal age
+
+    let signalAgeMs: number | null = null;
+    if (typeof signal.ts === 'number' && Number.isFinite(signal.ts) && signal.ts > 0) {
+      signalAgeMs = signal.ts < 1e11 ? now - signal.ts * 1000 : now - signal.ts;
+    } else if (typeof signal.chainTs === 'number' && Number.isFinite(signal.chainTs) && signal.chainTs > 0) {
+      signalAgeMs = signal.chainTs < 1e11 ? now - signal.chainTs * 1000 : now - signal.chainTs;
+    }
+    const latencyMs = signalAgeMs !== null ? signalAgeMs : 0;
 
     const logItem: SignalLogItem = {
       id: `sig_${signal.id}_${now}`,
@@ -364,7 +383,7 @@ export class SniperEngine {
     };
 
     // Check 1: Stale signal check (> 60s)
-    if (now - signal.ts > MAX_SIGNAL_AGE_MS) {
+    if (signalAgeMs !== null && signalAgeMs > MAX_SIGNAL_AGE_MS) {
       logItem.skipReason = 'stale_signal';
       this.recordSignalLog(logItem);
       return logItem;
@@ -382,8 +401,8 @@ export class SniperEngine {
       return logItem;
     }
 
-    // Check 3: Position already open for this mint
-    if (this.openPositions.some(p => p.mint === signal.mint)) {
+    // Check 3: Position already open or in flight for this mint
+    if (this.openPositions.some(p => p.mint === signal.mint) || this.openingMints.has(signal.mint)) {
       logItem.skipReason = 'position_already_open';
       this.recordSignalLog(logItem);
       return logItem;
@@ -396,40 +415,57 @@ export class SniperEngine {
       return logItem;
     }
 
-    // Check 5: On-Chain Safety Gate
-    const gateVerdict = await SolanaRpc.runOnChainGate(this.config, signal.mint);
-    logItem.gateVerdict = gateVerdict;
+    this.openingMints.add(signal.mint);
+    try {
+      // Check 5: On-Chain Safety Gate
+      const gateVerdict = await SolanaRpc.runOnChainGate(this.config, signal.mint);
+      logItem.gateVerdict = gateVerdict;
 
-    if (!gateVerdict.passed) {
-      logItem.status = 'rejected';
-      logItem.skipReason = 'gate_rejected';
-      logItem.rejectionReasons = gateVerdict.reasons;
+      if (!gateVerdict.passed) {
+        logItem.status = 'rejected';
+        logItem.skipReason = 'gate_rejected';
+        logItem.rejectionReasons = gateVerdict.reasons;
+        this.recordSignalLog(logItem);
+        return logItem;
+      }
+
+      // Check 6: DexScreener Quote & Liquidity Gate
+      const quote = await DexScreenerService.getQuote(signal.mint);
+      logItem.quote = quote || undefined;
+
+      if (!quote || quote.liqUsd < this.config.minLiqUsd) {
+        logItem.status = 'rejected';
+        logItem.skipReason = 'skip_liquidity';
+        logItem.rejectionReasons = [
+          quote
+            ? `Liquidity $${Math.round(quote.liqUsd).toLocaleString()} is below minimum required $${this.config.minLiqUsd.toLocaleString()}`
+            : 'No valid Solana DexScreener quote pair found',
+        ];
+        this.recordSignalLog(logItem);
+        return logItem;
+      }
+
+      // Re-check gates post-await before committing entry
+      if (this.openPositions.length >= this.config.maxOpen) {
+        logItem.skipReason = 'skip_maxopen';
+        this.recordSignalLog(logItem);
+        return logItem;
+      }
+      if (this.openPositions.some(p => p.mint === signal.mint)) {
+        logItem.skipReason = 'position_already_open';
+        this.recordSignalLog(logItem);
+        return logItem;
+      }
+
+      // ALL GATES PASSED: Enter Paper Position!
+      logItem.status = 'entered';
       this.recordSignalLog(logItem);
+
+      await this.enterPaperPosition(signal, quote);
       return logItem;
+    } finally {
+      this.openingMints.delete(signal.mint);
     }
-
-    // Check 6: DexScreener Quote & Liquidity Gate
-    const quote = await DexScreenerService.getQuote(signal.mint);
-    logItem.quote = quote || undefined;
-
-    if (!quote || quote.liqUsd < this.config.minLiqUsd) {
-      logItem.status = 'rejected';
-      logItem.skipReason = 'skip_liquidity';
-      logItem.rejectionReasons = [
-        quote
-          ? `Liquidity $${Math.round(quote.liqUsd).toLocaleString()} is below minimum required $${this.config.minLiqUsd.toLocaleString()}`
-          : 'No valid Solana DexScreener quote pair found',
-      ];
-      this.recordSignalLog(logItem);
-      return logItem;
-    }
-
-    // ALL GATES PASSED: Enter Paper Position!
-    logItem.status = 'entered';
-    this.recordSignalLog(logItem);
-
-    await this.enterPaperPosition(signal, quote);
-    return logItem;
   }
 
   /**
@@ -450,6 +486,7 @@ export class SniperEngine {
       symbol: quote.symbol || 'TOKEN',
       name: quote.name || 'Token',
       sig: signal.sig,
+      pairAddress: quote.pairAddress,
       openedAt: now,
       entryPriceRaw,
       entryPrice,
@@ -502,38 +539,44 @@ export class SniperEngine {
    * Price Tick & Exit Rules Loop (Every 5,000 ms)
    */
   public async tickPrices() {
-    if (this.openPositions.length === 0) return;
+    if (this.isTicking || this.openPositions.length === 0) return;
+    this.isTicking = true;
+    try {
+      const exitSlip = this.config.exitSlip;
+      const now = Date.now();
+      const positionsToKeep: PaperPosition[] = [];
 
-    const exitSlip = this.config.exitSlip;
-    const now = Date.now();
-    const positionsToKeep: PaperPosition[] = [];
+      for (const pos of this.openPositions) {
+        const quote = await DexScreenerService.getQuote(pos.mint, pos.pairAddress);
 
-    for (const pos of this.openPositions) {
-      const quote = await DexScreenerService.getQuote(pos.mint);
+        if (!quote) {
+          pos.missedQuoteTicks += 1;
+          if (!pos.missingSince) {
+            pos.missingSince = now;
+          }
+          // Never fabricate -100% loss. Mark unresolved after 12 missed ticks (~60s)
+          if (pos.missedQuoteTicks >= 12) {
+            pos.isUnresolved = true;
+          }
 
-      if (!quote) {
-        pos.missedQuoteTicks += 1;
-        // Never fabricate -100% loss. Mark unresolved after 12 missed ticks (~60s)
-        if (pos.missedQuoteTicks >= 12) {
-          pos.isUnresolved = true;
-        }
+          // Archive if unresolved continuously for > maxHoldSec (default 30m)
+          const missingDurationSec = (now - pos.missingSince) / 1000;
+          if (pos.isUnresolved && missingDurationSec > this.config.maxHoldSec) {
+            this.archiveUnresolvedPosition(pos);
+            continue;
+          }
 
-        // Archive if unresolved for > 30 minutes
-        if (pos.isUnresolved && now - pos.openedAt > this.config.maxHoldSec * 1000) {
-          this.closePosition(pos, 'unresolved', pos.executablePrice, pos.currentLiqUsd);
+          positionsToKeep.push(pos);
           continue;
         }
 
-        positionsToKeep.push(pos);
-        continue;
-      }
-
-      // Reset missed tick counter on valid quote
-      pos.missedQuoteTicks = 0;
-      pos.isUnresolved = false;
-      pos.currentQuotePrice = quote.priceUsd;
-      pos.currentLiqUsd = quote.liqUsd;
-      pos.lastTickAt = now;
+        // Reset missed tick counter on valid quote
+        pos.missedQuoteTicks = 0;
+        pos.missingSince = undefined;
+        pos.isUnresolved = false;
+        pos.currentQuotePrice = quote.priceUsd;
+        pos.currentLiqUsd = quote.liqUsd;
+        pos.lastTickAt = now;
 
       // Track price history for sparklines (up to 20 samples)
       if (!pos.priceHistory) pos.priceHistory = [];
@@ -627,6 +670,32 @@ export class SniperEngine {
     this.openPositions = positionsToKeep;
     StorageService.saveOpenPositions(this.openPositions);
     this.notify();
+    } finally {
+      this.isTicking = false;
+    }
+  }
+
+  /**
+   * Archive an unresolved position without closing at synthetic -100%
+   */
+  private archiveUnresolvedPosition(pos: PaperPosition) {
+    this.openPositions = this.openPositions.filter(p => p.id !== pos.id);
+    StorageService.saveOpenPositions(this.openPositions);
+
+    this.archivedUnresolved.unshift(pos);
+
+    this.addToast(
+      'warn',
+      `ARCHIVED UNRESOLVED: ${pos.symbol}`,
+      `Missing quotes for > 30m; archived without synthetic -100% close`
+    );
+
+    WorkerApi.sendNotify(
+      this.config,
+      `⚠️ [PAPER ARCHIVED UNRESOLVED] ${pos.symbol} (${pos.mint.slice(0, 6)}...)\nMissing quotes for > 30m; archived without synthetic close`
+    ).catch(() => {});
+
+    this.notify();
   }
 
   /**
@@ -655,15 +724,15 @@ export class SniperEngine {
     }
     const pnlUsd1x = (pos.stakeUsd * pnlPct1x) / 100;
 
-    // Calculate 2x Slippage Stress:
-    // Entry Slip = 10% (1.10), Exit Slip = 16% (0.84)
-    const entry2x = pos.entryPriceRaw * 1.10;
-    const exit2x = exitPriceRaw * (1 - 0.16);
+    // Calculate 2x Slippage Stress (matching computeDoubleSlipPnl parity):
+    const entrySlip2x = Math.min(0.99, this.config.entrySlip * 2);
+    const exitFactor2x = Math.max(0.01, 1 - this.config.exitSlip * 2);
+    const entry2x = pos.entryPriceRaw * (1 + entrySlip2x);
+    const exit2x = exitPriceRaw * exitFactor2x;
     let pnlPct2x = ((exit2x - entry2x) / entry2x) * 100;
-    if (pos.tookHalf) {
-      const half2x = 50 * (2.0 * 0.84 / 1.10 - 1);
-      const rem2x = 50 * (exit2x / entry2x - 1);
-      pnlPct2x = half2x + rem2x;
+    if (pos.tookHalf && typeof pos.halfRawPrice === 'number' && pos.halfRawPrice > 0) {
+      const half2x = ((pos.halfRawPrice * exitFactor2x - entry2x) / entry2x) * 100;
+      pnlPct2x = 0.5 * half2x + 0.5 * pnlPct2x;
     }
     const pnlUsd2x = (pos.stakeUsd * pnlPct2x) / 100;
 
@@ -737,15 +806,13 @@ export class SniperEngine {
     ];
     const mint = targetMint || mints[Math.floor(Math.random() * mints.length)];
     const mockSig: WorkerSignal = {
-      id: this.cursor + 1,
+      id: Math.floor(Date.now() / 1000),
       mint,
       sig: `${Math.random().toString(36).substring(2, 12)}TxMockSignatureSolanaMainnet`,
       ts: Date.now(),
       chainTs: Math.floor(Date.now() / 1000),
     };
 
-    this.cursor += 1;
-    StorageService.saveCursor(this.cursor);
     this.addToast('info', 'TEST SIGNAL INJECTED', `Auditing ${mint.slice(0, 6)}... through on-chain safety gate`);
     return await this.processSignal(mockSig);
   }
@@ -905,12 +972,17 @@ export class SniperEngine {
       }
     }
 
-    const unresolvedCount = exitReasonCounts.unresolved;
+    const unresolvedCount = this.archivedUnresolved.length;
 
-    // Stressed pnl considering unresolved as -25%
-    const stressedList = closed.map(t => (t.exitReason === 'unresolved' ? -25 : t.pnlPct2x));
-    const stressedMeanPnl = stressedList.length > 0 ? stressedList.reduce((a, b) => a + b, 0) / stressedList.length : 0;
-    const stressedMedianPnl = this.calcMedian(stressedList);
+    // Stressed PnL modeling worst-case -100% loss on remaining unclosed weight for archived unresolved positions
+    const stressedArchPnls = this.archivedUnresolved.map(a => {
+      const banked = a.tookHalf && a.bankedUsd ? (a.bankedUsd / (a.stakeUsd * 0.5)) * 50 : 0;
+      const remWeight = a.tookHalf ? 0.5 : 1.0;
+      return banked + remWeight * -100;
+    });
+    const combinedStressed = [...pnl2xList, ...stressedArchPnls];
+    const stressedMeanPnl = combinedStressed.length > 0 ? combinedStressed.reduce((a, b) => a + b, 0) / combinedStressed.length : 0;
+    const stressedMedianPnl = this.calcMedian(combinedStressed);
 
     // Evaluation Gate Condition:
     // closed >= 200 && mean1x > 0 && median1x > 0 && mean2x > 0 && median2x > 0
@@ -992,6 +1064,10 @@ export class SniperEngine {
       return (sorted[mid - 1] + sorted[mid]) / 2;
     }
     return sorted[mid];
+  }
+
+  public getArchivedUnresolved(): PaperPosition[] {
+    return [...this.archivedUnresolved];
   }
 }
 

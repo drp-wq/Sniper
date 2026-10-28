@@ -141,11 +141,7 @@ export const ApkModal: React.FC<ApkModalProps> = ({ isOpen, onClose }) => {
               </div>
               <div className="flex items-center gap-1.5 bg-zinc-950/60 p-1.5 rounded border border-zinc-800">
                 <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>android.permission.FOREGROUND_SERVICE</span>
-              </div>
-              <div className="flex items-center gap-1.5 bg-zinc-950/60 p-1.5 rounded border border-zinc-800">
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span>FOREGROUND_SERVICE_DATA_SYNC</span>
+                <span>android.permission.ACCESS_NETWORK_STATE</span>
               </div>
             </div>
           </div>

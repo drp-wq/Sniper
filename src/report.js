@@ -138,7 +138,18 @@ export function analyzeLogs(rows, { malformedLines = 0, activePositions = [], ar
     ? activePositions
     : [...openMap.values()];
 
-  const archivedList = archivedEvents.length ? archivedEvents : archivedPositions;
+  const archivedMap = new Map();
+  for (const a of archivedPositions) {
+    if (!a) continue;
+    const key = `${a.signalId ?? ""}:${a.sig ?? ""}:${a.mint ?? ""}`;
+    archivedMap.set(key, a);
+  }
+  for (const a of archivedEvents) {
+    if (!a) continue;
+    const key = `${a.signalId ?? ""}:${a.sig ?? ""}:${a.mint ?? ""}`;
+    archivedMap.set(key, a);
+  }
+  const archivedList = [...archivedMap.values()];
   const archivedUnresolvedCount = archivedList.length;
 
   // Separate worst-case stress estimate if archived unresolved positions lost 100% of their remaining unclosed weight

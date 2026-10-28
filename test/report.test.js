@@ -67,3 +67,21 @@ test("analyzeLogs is backward-compatible with legacy JSONL records, tracks archi
   assert.ok(formatted.includes("Bias warning:"));
   assert.ok(formatted.includes("Evaluation gate (>=200 trades"));
 });
+
+test("analyzeLogs combines and deduplicates archived positions from both log events and state file", () => {
+  const rows = [
+    { ev: "paper_open", mint: "m1" },
+    { ev: "paper_archived_unresolved", mint: "m1", sig: "sig1", signalId: 101, tookHalf: false },
+    { ev: "paper_close", mint: "m2", pnl: 20, reason: "tp" },
+  ];
+  const archivedPositions = [
+    // Duplicate of m1 in logs
+    { mint: "m1", sig: "sig1", signalId: 101, tookHalf: false },
+    // Distinct older archived position
+    { mint: "m3", sig: "sig3", signalId: 103, tookHalf: true, realizedBankedPct: 50 },
+  ];
+
+  const summary = analyzeLogs(rows, { archivedPositions });
+  assert.equal(summary.archivedUnresolvedCount, 2); // m1 (deduplicated) + m3
+  assert.equal(summary.closedCount, 1);
+});

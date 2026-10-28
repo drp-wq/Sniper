@@ -15,7 +15,6 @@ import { TabSettings } from './components/TabSettings';
 import { ApkModal } from './components/ApkModal';
 import { ToastContainer } from './components/ToastContainer';
 import { engine } from './services/engine';
-import { generateBenchmarkTrades } from './services/sampleData';
 import { Wifi, Battery, Signal, Zap } from 'lucide-react';
 
 export default function App() {
@@ -29,13 +28,6 @@ export default function App() {
     const unsubscribe = engine.subscribe(() => {
       setTick(t => t + 1);
     });
-
-    // Check if we should pre-seed benchmark trades for instant gate evaluation
-    const trades = engine.getClosedTrades();
-    if (trades.length === 0) {
-      const benchmark = generateBenchmarkTrades(200);
-      engine.loadBenchmarkTrades(benchmark);
-    }
 
     // Auto-refresh Worker state snapshot on mount
     engine.refreshWorkerKv().catch(() => {});

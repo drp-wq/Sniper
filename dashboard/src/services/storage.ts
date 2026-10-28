@@ -16,7 +16,7 @@ const STORAGE_KEYS = {
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
-  workerUrl: 'https://sniper-relay.pjdebnath01.workers.dev',
+  workerUrl: '',
   appKey: '',
   rpcUrl: 'https://api.mainnet-beta.solana.com',
   pollIntervalMs: 3000,
@@ -179,7 +179,19 @@ export const StorageService = {
   },
 
   exportPaperJsonl(trades: ClosedTrade[]): string {
-    return trades.map(t => JSON.stringify(t)).join('\n');
+    return trades
+      .map(t =>
+        JSON.stringify({
+          ev: 'paper_close',
+          mint: t.mint,
+          pnl: t.pnlPct1x,
+          pnl2xSlip: t.pnlPct2x,
+          heldSec: t.holdSeconds,
+          reason: t.exitReason,
+          ...t,
+        })
+      )
+      .join('\n');
   },
 
   exportPositionsJson(positions: PaperPosition[]): string {
@@ -189,11 +201,36 @@ export const StorageService = {
   importPaperJsonl(jsonlText: string): ClosedTrade[] {
     const lines = jsonlText.split('\n').filter(l => l.trim().length > 0);
     const parsed: ClosedTrade[] = [];
+    const now = Date.now();
     for (const line of lines) {
       try {
         const item = JSON.parse(line);
-        if (item && item.mint && typeof item.pnlPct1x === 'number') {
+        if (!item || !item.mint) continue;
+        if (typeof item.pnlPct1x === 'number') {
           parsed.push(item);
+        } else if (item.ev === 'paper_close' && typeof item.pnl === 'number') {
+          parsed.push({
+            id: `imported_${item.mint}_${item.time || now}_${Math.random().toString(36).substring(2, 7)}`,
+            mint: item.mint,
+            symbol: item.symbol || 'IMPORTED',
+            name: item.name || 'Imported Token',
+            openedAt: item.openTime ? new Date(item.openTime).getTime() : now - (item.heldSec || 0) * 1000,
+            closedAt: item.time ? new Date(item.time).getTime() : now,
+            holdSeconds: item.heldSec || 0,
+            entryPriceRaw: item.entryQuote || item.entry || 0,
+            entryPrice: item.entry || 0,
+            exitPriceRaw: item.exitQuote || 0,
+            exitPrice: item.exit || 0,
+            entryLiqUsd: item.liqUsd || 0,
+            exitLiqUsd: item.exitLiqUsd || item.liqUsd || 0,
+            exitReason: item.reason || 'manual_close',
+            tookHalf: Boolean(item.tookHalf),
+            bankedUsd: item.realizedBankedPct ? (100 * item.realizedBankedPct) / 100 : 0,
+            pnlPct1x: item.pnl,
+            pnlUsd1x: item.pnl,
+            pnlPct2x: typeof item.pnl2xSlip === 'number' ? item.pnl2xSlip : item.pnl,
+            pnlUsd2x: typeof item.pnl2xSlip === 'number' ? item.pnl2xSlip : item.pnl,
+          });
         }
       } catch (err) {
         console.warn('Skipping invalid JSON line', err);

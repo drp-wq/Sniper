@@ -20,7 +20,7 @@ export function selectPair(pairs, preferredPair = null, opts = {}) {
     // where targetMint is only the quoteToken.
     const baseAddr =
       typeof p.baseToken?.address === "string" ? p.baseToken.address.trim() : "";
-    if (targetMint && baseAddr && baseAddr !== targetMint) {
+    if (targetMint && baseAddr !== targetMint) {
       return false;
     }
     return true;
