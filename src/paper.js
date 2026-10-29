@@ -16,6 +16,14 @@ export const resetPositions = () => {
 export const getDailyRealizedPnl = () => dailyRealizedPnl;
 export const resetDailyRealizedPnl = () => { dailyRealizedPnl = 0; };
 
+export function formatPrice(px) {
+  if (!Number.isFinite(px) || px <= 0) return "$0.00";
+  if (px < 0.00001) return `$${px.toFixed(8)}`;
+  if (px < 0.01) return `$${px.toFixed(6)}`;
+  if (px < 1) return `$${px.toFixed(4)}`;
+  return `$${px.toFixed(2)}`;
+}
+
 // Compact view of open positions for the Mini App.
 export const snapshot = () =>
   [...positions.values()].map((p) => ({
@@ -43,6 +51,10 @@ export async function openPaper(mint, sig, deps = {}) {
   if (q.liqUsd < cfg.minLiqUsd) return logFn("skip_liquidity", { mint, liqUsd: q.liqUsd });
 
   const entry = q.price * (1 + cfg.entrySlip);
+  const slPrice = entry * (1 - R.stopLoss / 100);
+  const tpPrice = entry * (1 + R.takeProfit / 100);
+  const trailArmPrice = entry * (1 + R.trailArm / 100);
+
   positions.set(mint, {
     mint, sig, entry,
     peak: entry,
@@ -54,12 +66,20 @@ export async function openPaper(mint, sig, deps = {}) {
     realized: 0,       // pct points already banked (weighted)
     misses: 0,
   });
-  logFn("paper_open", { mint, entry, liqUsd: q.liqUsd });
-  notifyFn(`PAPER BUY ${mint}\nentry ${entry}\nliq $${Math.round(q.liqUsd)}`);
+  logFn("paper_open", { mint, entry, liqUsd: q.liqUsd, slPrice, tpPrice, trailArmPrice });
+  notifyFn(
+    `🟢 [PAPER BUY] ${mint}\n` +
+    `💵 Entry: ${formatPrice(entry)} (Screen: ${formatPrice(q.price)} +${(cfg.entrySlip * 100).toFixed(0)}% slip)\n` +
+    `🛑 Stop-Loss: ${formatPrice(slPrice)} (-${R.stopLoss}%)\n` +
+    `🎯 Take-Profit: ${formatPrice(tpPrice)} (+${R.takeProfit}% | Sell 50%)\n` +
+    `🚀 Trailing Stop: Arms at ${formatPrice(trailArmPrice)} (+${R.trailArm}%)\n` +
+    `💧 Liquidity: $${Math.round(q.liqUsd).toLocaleString()}`
+  );
   return true;
 }
 
-// Pure rule engine. Returns null, { partial }, or { exit } with reason and pct.
+// Dynamic rule engine with auto-breakeven and volatility-adaptive trailing stop.
+// Returns null, { partial }, or { exit } with reason and pct.
 export function evaluate(p, q, now = Date.now()) {
   const px = q.price * (1 - cfg.exitSlip);          // pessimistic executable price
   const pct = (px / p.entry - 1) * 100;
@@ -67,15 +87,34 @@ export function evaluate(p, q, now = Date.now()) {
   const newHigh = px > p.peak;
   if (newHigh) p.peak = px;
 
-  if (pct <= -R.stopLoss) return { exit: "stop_loss", pct };
-  if (q.liqUsd < p.liq0 * (1 - R.liqDrop / 100)) return { exit: "liquidity_drop", pct };
+  // 1. Dynamic Stop Loss: -25% initial risk cap, or Breakeven (0%) once half is banked
+  const effectiveStopLoss = p.tookHalf ? 0 : -R.stopLoss;
+  if (pct <= effectiveStopLoss) {
+    return { exit: p.tookHalf ? "breakeven_stop" : "stop_loss", pct };
+  }
+
+  // 2. Dynamic Liquidity Drop: 30% baseline, accelerated to 20% if already in profit
+  const liqThreshold = pct > 15 ? (1 - Math.min(R.liqDrop, 20) / 100) : (1 - R.liqDrop / 100);
+  if (q.liqUsd < p.liq0 * liqThreshold) return { exit: "liquidity_drop", pct };
+
+  // 3. Max Hold Timeout
   if (now - p.openedAt >= R.maxHoldMin * 60000) return { exit: "max_hold", pct };
 
+  // 4. Trailing Stop with Dynamic Ratchet on Multi-bagger Runners
   if (pct >= R.trailArm) p.trailArmed = true;
-  if (p.trailArmed && px <= p.peak * (1 - R.trail / 100)) return { exit: "trailing_stop", pct };
+  if (p.trailArmed) {
+    const peakPct = (p.peak / p.entry - 1) * 100;
+    let dynamicTrail = R.trail; // baseline 20%
+    if (peakPct >= 200) dynamicTrail = Math.max(10, R.trail * 0.5);       // 10% on 3x+ moonshots
+    else if (peakPct >= 100) dynamicTrail = Math.max(14, R.trail * 0.75); // 15% on 2x+ runners
 
+    if (px <= p.peak * (1 - dynamicTrail / 100)) return { exit: "trailing_stop", pct };
+  }
+
+  // 5. Partial Take Profit Half (TP1)
   if (!p.tookHalf && pct >= R.takeProfit) return { partial: "take_profit_half", pct };
 
+  // 6. Time Stop on Stagnant Sideways Action
   const inBand = pct >= -R.bandDown && pct <= R.bandUp;
   if (inBand && !newHigh) {
     p.sidewaysSince ??= now;
@@ -96,7 +135,12 @@ function close(p, reason, pct, deps = {}) {
   dailyRealizedPnl += pnl;
   const heldSec = Math.round((now - p.openedAt) / 1000);
   logFn("paper_close", { mint: p.mint, reason, pnl: Number(pnl.toFixed(2)), heldSec });
-  notifyFn(`PAPER EXIT ${p.mint}\n${reason}  pnl ${pnl.toFixed(1)}%  held ${heldSec}s`);
+  notifyFn(
+    `🔴 [PAPER EXIT] ${p.mint}\n` +
+    `Reason: ${reason}\n` +
+    `PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%\n` +
+    `Held: ${heldSec}s`
+  );
 }
 
 export function closePaperPosition(mint, reason = "manual_close", deps = {}) {
@@ -130,6 +174,11 @@ export async function tick(deps = {}) {
         p.tookHalf = true;
         p.realized += 0.5 * res.pct;
         logFn("paper_partial", { mint: p.mint, reason: res.partial, pct: Number(res.pct.toFixed(1)) });
+        notifyFn(
+          `💰 [PAPER 50% TP BANKED] ${p.mint}\n` +
+          `Gain: +${res.pct.toFixed(1)}%\n` +
+          `Status: 50% position banked, trailing remaining 50%`
+        );
       } else {
         close(p, res.exit, res.pct, { logFn, notifyFn, now });
       }

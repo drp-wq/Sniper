@@ -423,6 +423,8 @@ export const TabAnalytics: React.FC = () => {
                       className={`h-full ${
                         reason === 'trailing_stop'
                           ? 'bg-emerald-400'
+                          : reason === 'breakeven_stop'
+                          ? 'bg-cyan-400'
                           : reason === 'stop_loss'
                           ? 'bg-red-400'
                           : reason === 'unresolved'

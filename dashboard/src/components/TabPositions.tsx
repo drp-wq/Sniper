@@ -292,11 +292,17 @@ export const TabPositions: React.FC = () => {
                   {/* Exit Criteria Triggers & Emergency Close */}
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-2 border-t border-zinc-800/80 text-[11px] text-zinc-400">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <span>SL: {config.stopLossPct}%</span>
+                      <span className="text-red-400 font-mono">
+                        SL: ${(pos.entryPrice * (1 - Math.abs(config.stopLossPct) / 100)).toFixed(6)} ({config.stopLossPct}%)
+                      </span>
                       <span>•</span>
-                      <span>Trail Arm: +{config.trailingStopArmPct}%</span>
+                      <span className="text-emerald-400 font-mono">
+                        TP 50%: ${(pos.entryPrice * (1 + config.takeProfitHalfPct / 100)).toFixed(6)} (+{config.takeProfitHalfPct}%)
+                      </span>
                       <span>•</span>
-                      <span>TP 50%: +{config.takeProfitHalfPct}%</span>
+                      <span className="text-cyan-400 font-mono">
+                        Trail Arm: ${(pos.entryPrice * (1 + config.trailingStopArmPct / 100)).toFixed(6)} (+{config.trailingStopArmPct}%)
+                      </span>
                       <span>•</span>
                       <span>Time-Stop: {config.timeStopWindowSec}s</span>
                       <span>•</span>

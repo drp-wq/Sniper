@@ -540,14 +540,37 @@ export class SniperEngine {
       sounds.playBuy();
     }
 
+    const slPct = Math.abs(this.config.stopLossPct);
+    const tpPct = this.config.takeProfitHalfPct;
+    const trailArmPct = this.config.trailingStopArmPct;
+    const slPrice = entryPrice * (1 - slPct / 100);
+    const tpPrice = entryPrice * (1 + tpPct / 100);
+    const trailArmPrice = entryPrice * (1 + trailArmPct / 100);
+
+    const fmt = (p: number) => {
+      if (!Number.isFinite(p) || p <= 0) return '$0.00';
+      if (p < 0.00001) return `$${p.toFixed(8)}`;
+      if (p < 0.01) return `$${p.toFixed(6)}`;
+      if (p < 1) return `$${p.toFixed(4)}`;
+      return `$${p.toFixed(2)}`;
+    };
+
     this.addToast(
       'buy',
       `PAPER BUY: ${position.symbol}`,
-      `Filled at $${entryPrice.toFixed(6)} (+5% slip)\nLiq: $${Math.round(position.entryLiqUsd).toLocaleString()}`
+      `Entry: ${fmt(entryPrice)}\nSL: ${fmt(slPrice)} (-${slPct}%) | TP: ${fmt(tpPrice)} (+${tpPct}%)`
     );
 
     // Send Telegram Notification via Worker
-    const notifyText = `🟢 [PAPER BUY] ${position.symbol} (${position.mint.slice(0, 6)}...)\nEntry: $${entryPrice.toFixed(6)} (+5% slip)\nLiq: $${Math.round(position.entryLiqUsd).toLocaleString()}`;
+    const notifyText = [
+      `🟢 [PAPER BUY] ${position.symbol}`,
+      `Mint: ${position.mint}`,
+      `💵 Entry Fill: ${fmt(entryPrice)} (Screen: ${fmt(entryPriceRaw)} +${(this.config.entrySlip * 100).toFixed(0)}% slip)`,
+      `🛑 Stop-Loss: ${fmt(slPrice)} (-${slPct}%)`,
+      `🎯 Take-Profit: ${fmt(tpPrice)} (+${tpPct}% | Sell 50%)`,
+      `🚀 Trailing Stop: ${fmt(trailArmPrice)} (Arms at +${trailArmPct}%)`,
+      `💧 Liquidity: $${Math.round(position.entryLiqUsd).toLocaleString()}`,
+    ].join('\n');
     WorkerApi.sendNotify(this.config, notifyText).catch(() => {});
 
     // Update Worker heartbeat with new position count
@@ -644,24 +667,33 @@ export class SniperEngine {
         this.addToast('info', `TRAIL ARMED: ${pos.symbol}`, `Armed at +${rawPnlPct.toFixed(1)}% (will trail peak by 20%)`);
       }
 
-      // EXIT EVALUATION:
+      // EXIT EVALUATION (Dynamic Profitability Architecture):
 
-      // Exit 1: Stop Loss (<= -25%)
-      if (rawPnlPct <= this.config.stopLossPct) {
+      // Exit 1: Dynamic Stop Loss (<= -25%, or Breakeven <= 0% once 50% TP has been banked)
+      const effectiveStopLossPct = pos.tookHalf ? 0 : this.config.stopLossPct;
+      if (rawPnlPct <= effectiveStopLossPct) {
         if (this.config.soundAlerts) sounds.playStopLoss();
-        this.closePosition(pos, 'stop_loss', executablePrice, quote.liqUsd);
+        this.closePosition(pos, pos.tookHalf ? 'breakeven_stop' : 'stop_loss', executablePrice, quote.liqUsd);
         continue;
       }
 
-      // Exit 2: Trailing Stop (Armed and pulled back 20% from peak executable price)
-      if (pos.trailingArmed && executablePrice <= pos.peakExecutablePrice * (1 - this.config.trailingStopPullbackPct / 100)) {
+      // Exit 2: Trailing Stop with Dynamic Ratchet on Multi-Baggers
+      let dynamicPullback = this.config.trailingStopPullbackPct; // baseline 20%
+      if (pos.peakPnlPct >= 200) {
+        dynamicPullback = Math.max(10, this.config.trailingStopPullbackPct * 0.5); // 10% on 3x+ moonshots
+      } else if (pos.peakPnlPct >= 100) {
+        dynamicPullback = Math.max(14, this.config.trailingStopPullbackPct * 0.75); // 15% on 2x+ runners
+      }
+
+      if (pos.trailingArmed && executablePrice <= pos.peakExecutablePrice * (1 - dynamicPullback / 100)) {
         if (this.config.soundAlerts) sounds.playTakeProfit();
         this.closePosition(pos, 'trailing_stop', executablePrice, quote.liqUsd);
         continue;
       }
 
-      // Exit 3: Liquidity Drop (liqUsd < entryLiqUsd * 0.70)
-      if (quote.liqUsd < pos.entryLiqUsd * 0.70) {
+      // Exit 3: Dynamic Liquidity Drop (accelerated 20% if already in profit, 30% baseline)
+      const liqDropFactor = rawPnlPct > 15 ? 0.80 : 0.70;
+      if (quote.liqUsd < pos.entryLiqUsd * liqDropFactor) {
         if (this.config.soundAlerts) sounds.playStopLoss();
         this.closePosition(pos, 'liquidity_drop', executablePrice, quote.liqUsd);
         continue;
@@ -796,7 +828,23 @@ export class SniperEngine {
     );
 
     // Notify Telegram via Worker
-    const notifyText = `🔴 [PAPER EXIT] ${pos.symbol} (${pos.mint.slice(0, 6)}...)\nReason: ${exitReason}\n1x PnL: ${closedTrade.pnlPct1x >= 0 ? '+' : ''}${closedTrade.pnlPct1x}%\n2x Slip PnL: ${closedTrade.pnlPct2x >= 0 ? '+' : ''}${closedTrade.pnlPct2x}%\nHold: ${holdSeconds}s`;
+    const fmtExit = (p: number) => {
+      if (!Number.isFinite(p) || p <= 0) return '$0.00';
+      if (p < 0.00001) return `$${p.toFixed(8)}`;
+      if (p < 0.01) return `$${p.toFixed(6)}`;
+      if (p < 1) return `$${p.toFixed(4)}`;
+      return `$${p.toFixed(2)}`;
+    };
+
+    const notifyText = [
+      `🔴 [PAPER EXIT] ${pos.symbol}`,
+      `Mint: ${pos.mint}`,
+      `Reason: ${exitReason}`,
+      `Exit Price: ${fmtExit(exitPrice)}`,
+      `1x PnL: ${closedTrade.pnlPct1x >= 0 ? '+' : ''}${closedTrade.pnlPct1x}%`,
+      `2x Slip PnL: ${closedTrade.pnlPct2x >= 0 ? '+' : ''}${closedTrade.pnlPct2x}%`,
+      `Hold: ${holdSeconds}s`,
+    ].join('\n');
     WorkerApi.sendNotify(this.config, notifyText).catch(() => {});
 
     // Update Heartbeat
@@ -984,6 +1032,7 @@ export class SniperEngine {
     // Exit reason breakdown
     const exitReasonCounts: Record<ExitReason, number> = {
       stop_loss: 0,
+      breakeven_stop: 0,
       liquidity_drop: 0,
       max_hold: 0,
       trailing_stop: 0,

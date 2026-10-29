@@ -162,3 +162,88 @@ test("evaluate: time-stop triggers on flat price action with calibrated bandDown
   assert.ok(resEnd);
   assert.equal(resEnd.exit, "time_stop");
 });
+
+test("evaluate: auto-breakeven triggers at <= 0% after takeProfit half is banked", () => {
+  const p = {
+    mint: "MintAutoBreakeven",
+    entry: 100,
+    peak: 220,
+    openedAt: 1000000,
+    liq0: 50000,
+    sidewaysSince: null,
+    trailArmed: true,
+    tookHalf: true, // Already banked 50% at +100%
+    realized: 50,
+    misses: 0,
+  };
+
+  // Price pulls down to entry price (0% profit)
+  const qBreakeven = { price: 100 / (1 - cfg.exitSlip), liqUsd: 50000, pair: "pair1" };
+  const res = evaluate(p, qBreakeven, 1000000 + 10000);
+  assert.ok(res);
+  assert.equal(res.exit, "breakeven_stop");
+  assert.ok(res.pct <= 0);
+});
+
+test("evaluate: dynamic trailing stop tightens to 15% on 2x runners and 10% on 3x+ moonshots", () => {
+  // Test 1: Runner pumped to +150% peak (peakPct = 150) -> dynamicTrail is 15%
+  const p1 = {
+    mint: "MintRunner2x",
+    entry: 100,
+    peak: 250, // +150% peak
+    openedAt: 1000000,
+    liq0: 50000,
+    sidewaysSince: null,
+    trailArmed: true,
+    tookHalf: false,
+    realized: 0,
+    misses: 0,
+  };
+
+  // Pullback 16% from peak (250 * 0.84 = 210) -> with 15% ratchet, triggers exit
+  const qPull15 = { price: 210 / (1 - cfg.exitSlip), liqUsd: 50000, pair: "pair1" };
+  const res1 = evaluate(p1, qPull15, 1000000 + 5000);
+  assert.ok(res1);
+  assert.equal(res1.exit, "trailing_stop");
+
+  // Test 2: Moonshot pumped to +300% peak (peakPct = 300) -> dynamicTrail is 10%
+  const p2 = {
+    mint: "MintMoonshot",
+    entry: 100,
+    peak: 400, // +300% peak
+    openedAt: 1000000,
+    liq0: 50000,
+    sidewaysSince: null,
+    trailArmed: true,
+    tookHalf: false,
+    realized: 0,
+    misses: 0,
+  };
+
+  // Pullback 11% from peak (400 * 0.89 = 356) -> with 10% ratchet, triggers exit
+  const qPull10 = { price: 356 / (1 - cfg.exitSlip), liqUsd: 50000, pair: "pair1" };
+  const res2 = evaluate(p2, qPull10, 1000000 + 5000);
+  assert.ok(res2);
+  assert.equal(res2.exit, "trailing_stop");
+});
+
+test("evaluate: accelerated liquidity drop triggers at -20% when in profit", () => {
+  const p = {
+    mint: "MintLiqProfit",
+    entry: 100,
+    peak: 140,
+    openedAt: 1000000,
+    liq0: 100000,
+    sidewaysSince: null,
+    trailArmed: false,
+    tookHalf: false,
+    realized: 0,
+    misses: 0,
+  };
+
+  // In profit (+25%), but liquidity dropped 22% (from 100k to 78k)
+  const qDrop = { price: 125 / (1 - cfg.exitSlip), liqUsd: 78000, pair: "pair1" };
+  const res = evaluate(p, qDrop, 1000000 + 5000);
+  assert.ok(res);
+  assert.equal(res.exit, "liquidity_drop");
+});

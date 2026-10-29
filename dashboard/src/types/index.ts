@@ -104,6 +104,7 @@ export interface DexQuote {
 
 export type ExitReason =
   | 'stop_loss'
+  | 'breakeven_stop'
   | 'liquidity_drop'
   | 'max_hold'
   | 'trailing_stop'

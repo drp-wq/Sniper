@@ -49,3 +49,22 @@ test("closePaperPosition: safely closes paper position and updates daily PnL", a
   const closedAgain = closePaperPosition("Token_Close_Test", "manual_close");
   assert.equal(closedAgain, false);
 });
+
+test("openPaper: sends alert with suitable entry price, stop-loss, and take-profit", async () => {
+  resetPositions();
+  const mockQuote = async () => ({ price: 0.05, liqUsd: 25000 });
+  let alertText = "";
+  const mockNotify = (msg) => { alertText = msg; };
+
+  await openPaper("Token_Alert_Test", "sig999", {
+    getQuote: mockQuote,
+    retryDelayMs: 0,
+    notify: mockNotify,
+  });
+
+  assert.ok(alertText.includes("PAPER BUY"));
+  assert.ok(alertText.includes("Entry: $0.0525"));
+  assert.ok(alertText.includes("Stop-Loss: $0.0394 (-25%)"));
+  assert.ok(alertText.includes("Take-Profit: $0.1050 (+100% | Sell 50%)"));
+  assert.ok(alertText.includes("Trailing Stop: Arms at $0.0788 (+50%)"));
+});
