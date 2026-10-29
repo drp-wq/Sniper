@@ -20,6 +20,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { engine } from '../services/engine';
+import { TelegramService } from '../services/telegram';
 
 interface TopBarProps {
   isMobilePreview: boolean;
@@ -98,6 +99,14 @@ export const TopBar: React.FC<TopBarProps> = ({
             <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
             <span>PAPER MODE ONLY</span>
           </div>
+
+          {/* Telegram Mini App indicator */}
+          {TelegramService.isTma() && (
+            <div className="flex items-center gap-1 bg-sky-500/15 border border-sky-500/40 px-2 py-0.5 rounded text-sky-300 font-mono text-[11px] font-semibold">
+              <Smartphone className="w-3 h-3 text-sky-400" />
+              <span>TG MINI APP</span>
+            </div>
+          )}
 
           {/* Remote & Local Halt Indicator */}
           {anyHalt && (

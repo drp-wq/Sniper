@@ -50,16 +50,26 @@ function redactWorkerError(err, env = {}) {
   return msg.slice(0, 200);
 }
 
-async function tg(env, text) {
-  if (!env?.TG_TOKEN || !env?.TG_CHAT) return;
-  await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/sendMessage`, {
+export async function sendTelegram(env, chatId, text, extra = {}) {
+  if (!env?.TG_TOKEN) return null;
+  const recipient = chatId || env.TG_CHAT;
+  if (!recipient) return null;
+  const payload = {
+    chat_id: recipient,
+    text: String(text).slice(0, 4000),
+    parse_mode: "Markdown",
+    ...extra,
+  };
+  const res = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      chat_id: env.TG_CHAT,
-      text: String(text).slice(0, 3500),
-    }),
-  }).catch(() => {});
+    body: JSON.stringify(payload),
+  }).catch(() => null);
+  return res ? res.json().catch(() => null) : null;
+}
+
+async function tg(env, text) {
+  await sendTelegram(env, env?.TG_CHAT, text);
 }
 
 // Adapt this after verifying actual Helius webhook payloads.
@@ -697,10 +707,269 @@ function getQueueStub(env) {
   return null;
 }
 
+export async function handleTelegramWebhook(req, env) {
+  if (req.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
+
+  const secretHeader = req.headers.get("x-telegram-bot-api-secret-token");
+  if (env?.TG_WEBHOOK_SECRET && secretHeader !== env.TG_WEBHOOK_SECRET) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  const update = await req.json().catch(() => null);
+  if (!update || typeof update !== "object") {
+    return json({ ok: true });
+  }
+
+  const origin = new URL(req.url).origin;
+  const appBaseUrl = env?.MINI_APP_URL || `${origin}/`;
+  const launchUrl = new URL(appBaseUrl);
+  if (env?.APP_KEY) {
+    launchUrl.searchParams.set("worker", origin);
+    launchUrl.searchParams.set("key", env.APP_KEY);
+  }
+
+  // Handle Callback Queries (from inline buttons)
+  if (update.callback_query) {
+    const cb = update.callback_query;
+    const cbChatId = cb.message?.chat?.id;
+    const cbData = cb.data;
+
+    if (env?.TG_TOKEN && cb.id) {
+      await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/answerCallbackQuery`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ callback_query_id: cb.id }),
+      }).catch(() => {});
+    }
+
+    if (cbData === "tma_status" && cbChatId) {
+      await replyTelegramStatus(env, cbChatId, launchUrl.toString());
+    } else if (cbData === "tma_halt" && cbChatId) {
+      await toggleTelegramHalt(env, true);
+      await sendTelegram(env, cbChatId, "🚨 *EMERGENCY HALT ACTIVATED*\nNew paper trade entries are paused.");
+    } else if (cbData === "tma_resume" && cbChatId) {
+      await toggleTelegramHalt(env, false);
+      await sendTelegram(env, cbChatId, "✅ *EMERGENCY HALT CLEARED*\nPaper trade entries are active.");
+    }
+    return json({ ok: true });
+  }
+
+  const msg = update.message || update.edited_message;
+  if (!msg || !msg.text) return json({ ok: true });
+
+  const chatId = msg.chat?.id;
+  if (!chatId) return json({ ok: true });
+
+  const text = msg.text.trim();
+
+  if (text.startsWith("/start") || text.startsWith("/app") || text.startsWith("/open")) {
+    const welcome = [
+      "🎯 *SOLANA SNIPER TERMINAL*",
+      "• *Mode:* Paper / Shadow Trading Only",
+      "• *Security:* Token-2022 Safety Gates + 2x Slip Stress",
+      "• *Device:* Pixel 10 Pro XL / iPad (No Sideloading Required)",
+      "",
+      "Tap below to launch the full trading terminal directly inside Telegram:",
+    ].join("\n");
+
+    await sendTelegram(env, chatId, welcome, {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            {
+              text: "🚀 Launch Sniper Terminal",
+              web_app: { url: launchUrl.toString() },
+            },
+          ],
+          [
+            { text: "📊 Check Status", callback_data: "tma_status" },
+            { text: "🚨 Halt Entries", callback_data: "tma_halt" },
+            { text: "▶️ Resume", callback_data: "tma_resume" },
+          ],
+        ],
+      },
+    });
+    return json({ ok: true });
+  }
+
+  if (text.startsWith("/status")) {
+    await replyTelegramStatus(env, chatId, launchUrl.toString());
+    return json({ ok: true });
+  }
+
+  if (text.startsWith("/halt")) {
+    await toggleTelegramHalt(env, true);
+    await sendTelegram(env, chatId, "🚨 *EMERGENCY HALT ACTIVATED*\nNew paper trade entries are paused.");
+    return json({ ok: true });
+  }
+
+  if (text.startsWith("/resume")) {
+    await toggleTelegramHalt(env, false);
+    await sendTelegram(env, chatId, "✅ *EMERGENCY HALT CLEARED*\nPaper trade entries are active.");
+    return json({ ok: true });
+  }
+
+  if (text.startsWith("/help")) {
+    const help = [
+      "🤖 *SOLANA SNIPER COMMANDS*",
+      "• `/app` - Launch Telegram Mini App",
+      "• `/status` - Check live queue sequence and heartbeat",
+      "• `/halt` - Emergency pause all paper trade entries",
+      "• `/resume` - Resume paper trade entries",
+    ].join("\n");
+    await sendTelegram(env, chatId, help);
+    return json({ ok: true });
+  }
+
+  return json({ ok: true });
+}
+
+async function replyTelegramStatus(env, chatId, appUrl) {
+  const stub = getQueueStub(env);
+  let state = null;
+  if (stub) {
+    const res = await stub.fetch(new Request("https://worker.internal/export-kv")).catch(() => null);
+    state = res ? await res.json().catch(() => null) : null;
+  } else if (env?.KV) {
+    const q = await readKvQ(env);
+    const hb = await env.KV.get("hb", "json").catch(() => null);
+    state = { queue: q, hb };
+  }
+  const isHalted = Boolean(state?.queue?.halt);
+  const seq = state?.queue?.seq ?? 0;
+  const itemsCount = state?.queue?.items?.length ?? 0;
+  const hb = state?.hb;
+  const hbAgo = hb ? Math.max(0, Math.round((Date.now() - hb.ts) / 1000)) : null;
+
+  const statusMsg = [
+    "📊 *SNIPER RELAY STATUS*",
+    `• *Queue State:* ${isHalted ? "🚨 HALTED" : "🟢 ACTIVE"}`,
+    `• *Queue Sequence:* #${seq}`,
+    `• *Signals In Buffer:* ${itemsCount}`,
+    `• *Heartbeat:* ${hb ? `${hbAgo}s ago (${hb.open} open positions)` : "None recorded"}`,
+    `• *Mode:* Paper Only (No Private Keys)`,
+  ].join("\n");
+
+  await sendTelegram(env, chatId, statusMsg, {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          {
+            text: "🚀 Open Terminal",
+            web_app: { url: appUrl },
+          },
+        ],
+      ],
+    },
+  });
+}
+
+async function toggleTelegramHalt(env, haltOn) {
+  const stub = getQueueStub(env);
+  if (stub) {
+    await stub.fetch(new Request(`https://worker.internal/halt?on=${haltOn ? 1 : 0}`, { method: "POST" })).catch(() => {});
+  } else if (env?.KV) {
+    await withKvMutex(env.KV, async () => {
+      const q = await readKvQ(env);
+      q.halt = haltOn ? 1 : 0;
+      await env.KV.put("halt", haltOn ? "1" : "0");
+      await env.KV.put("queue", JSON.stringify(q));
+    });
+  }
+}
+
+export async function handleTelegramSetup(req, env) {
+  if (req.method !== "POST") {
+    return json({ error: "method_not_allowed" }, 405);
+  }
+  if (!env?.TG_TOKEN) {
+    return json({ error: "TG_TOKEN not configured in Worker secrets" }, 400);
+  }
+
+  const url = new URL(req.url);
+  const origin = url.origin;
+  const body = await req.json().catch(() => ({}));
+  const miniAppUrl = body?.miniAppUrl || env?.MINI_APP_URL || `${origin}/`;
+  const launchUrl = new URL(miniAppUrl);
+  if (env?.APP_KEY) {
+    launchUrl.searchParams.set("worker", origin);
+    launchUrl.searchParams.set("key", env.APP_KEY);
+  }
+
+  // 1. Set Webhook
+  const webhookUrl = `${origin}/telegram-webhook`;
+  const setWebhookRes = await fetch(
+    `https://api.telegram.org/bot${env.TG_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`,
+  ).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+
+  // 2. Set Commands
+  const commands = [
+    { command: "app", description: "🚀 Launch Solana Sniper Mini App" },
+    { command: "status", description: "📊 Check queue sequence and heartbeat" },
+    { command: "halt", description: "🚨 Emergency pause paper trading" },
+    { command: "resume", description: "✅ Resume paper trading entries" },
+    { command: "help", description: "ℹ️ Show command list" },
+  ];
+  const setCommandsRes = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/setMyCommands`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ commands }),
+  }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+
+  // 3. Set Chat Menu Button to open Mini App directly
+  const setMenuButtonRes = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/setChatMenuButton`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      menu_button: {
+        type: "web_app",
+        text: "🚀 Launch Sniper",
+        web_app: { url: launchUrl.toString() },
+      },
+    }),
+  }).then((r) => r.json()).catch((e) => ({ ok: false, error: String(e) }));
+
+  // 4. Get Bot Info
+  const meRes = await fetch(`https://api.telegram.org/bot${env.TG_TOKEN}/getMe`)
+    .then((r) => r.json()).catch(() => null);
+
+  return json({
+    ok: true,
+    bot: meRes?.result || null,
+    webhook: setWebhookRes,
+    commands: setCommandsRes,
+    menuButton: setMenuButtonRes,
+    launchUrl: launchUrl.toString(),
+  });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const path = url.pathname;
+
+    // Telegram Bot Webhook (called directly by Telegram servers)
+    if ((path === "/telegram-webhook" || path === "/tg-webhook") && req.method === "POST") {
+      return handleTelegramWebhook(req, env);
+    }
+
+    // Static Assets for Telegram Mini App / Web Terminal (if configured via wrangler [assets])
+    if (env?.ASSETS) {
+      if (
+        path === "/" ||
+        path === "/app" ||
+        path.startsWith("/assets/") ||
+        path.endsWith(".js") ||
+        path.endsWith(".css") ||
+        path.endsWith(".json") ||
+        path.endsWith(".svg") ||
+        path.endsWith(".html")
+      ) {
+        return env.ASSETS.fetch(req);
+      }
+    }
 
     // Helius webhook (its own auth header).
     if (path === "/hook" && req.method === "POST") {
@@ -747,6 +1016,10 @@ export default {
       const b = await req.json().catch(() => ({}));
       await tg(env, b?.text ?? "");
       return json({ ok: true });
+    }
+
+    if (path === "/telegram-setup" && req.method === "POST") {
+      return handleTelegramSetup(req, env);
     }
 
     return json({ error: "not found" }, 404);

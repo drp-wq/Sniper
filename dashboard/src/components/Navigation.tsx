@@ -11,6 +11,7 @@ import {
   BarChart3,
   Settings,
 } from 'lucide-react';
+import { TelegramService } from '../services/telegram';
 
 export type TabId = 'dashboard' | 'positions' | 'signals' | 'analytics' | 'settings';
 
@@ -67,7 +68,10 @@ export const Navigation: React.FC<NavigationProps> = ({
           return (
             <button
               key={tab.id}
-              onClick={() => onSelectTab(tab.id)}
+              onClick={() => {
+                TelegramService.haptic('click');
+                onSelectTab(tab.id);
+              }}
               className={`relative flex flex-col items-center justify-center py-1 px-2.5 rounded-lg transition-all min-w-[56px] ${
                 isActive
                   ? 'text-emerald-400 bg-emerald-500/10'

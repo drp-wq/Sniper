@@ -15,6 +15,7 @@ import { TabSettings } from './components/TabSettings';
 import { ApkModal } from './components/ApkModal';
 import { ToastContainer } from './components/ToastContainer';
 import { engine } from './services/engine';
+import { TelegramService } from './services/telegram';
 import { Wifi, Battery, Signal, Zap } from 'lucide-react';
 
 export default function App() {
@@ -25,6 +26,9 @@ export default function App() {
 
   // Subscribe to engine state changes (real-time ticks, poll updates, gate verdicts)
   useEffect(() => {
+    // Initialize Telegram Mini App SDK, auto-expand, and auto-configure if launched via Telegram
+    TelegramService.init();
+
     const unsubscribe = engine.subscribe(() => {
       setTick(t => t + 1);
     });

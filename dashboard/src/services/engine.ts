@@ -21,6 +21,7 @@ import { DexScreenerService } from './dexScreener.ts';
 import { SolanaRpc } from './solanaRpc.ts';
 import { StorageService } from './storage.ts';
 import { WorkerApi } from './workerApi.ts';
+import { TelegramService } from './telegram.ts';
 
 type Listener = () => void;
 
@@ -41,6 +42,7 @@ class SoundManager {
 
   playBuy() {
     try {
+      TelegramService.haptic('buy');
       if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
         (window as any).AndroidBridge.hapticFeedback('buy');
       }
@@ -62,6 +64,7 @@ class SoundManager {
 
   playTakeProfit() {
     try {
+      TelegramService.haptic('tp');
       if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
         (window as any).AndroidBridge.hapticFeedback('tp');
       }
@@ -83,6 +86,7 @@ class SoundManager {
 
   playStopLoss() {
     try {
+      TelegramService.haptic('sl');
       if (typeof window !== 'undefined' && (window as any).AndroidBridge?.hapticFeedback) {
         (window as any).AndroidBridge.hapticFeedback('sl');
       }

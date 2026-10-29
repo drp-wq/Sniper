@@ -125,6 +125,22 @@ export const ApkModal: React.FC<ApkModalProps> = ({ isOpen, onClose }) => {
             </button>
           </div>
 
+          {/* Telegram Mini App Option (Safe for Pixel Advanced Protection) */}
+          <div className="p-3.5 rounded-xl bg-gradient-to-r from-sky-950/40 via-zinc-900 to-zinc-900 border border-sky-500/30 flex items-center justify-between gap-3">
+            <div>
+              <div className="font-bold text-white text-xs flex items-center gap-1.5">
+                <Smartphone className="w-4 h-4 text-sky-400" />
+                <span>Telegram Mini App (Pixel Advanced Protection Safe)</span>
+              </div>
+              <div className="text-[11px] text-zinc-400 mt-0.5">
+                Zero sideloading needed. Run directly inside Telegram with full native haptic feedback and real-time alerts.
+              </div>
+            </div>
+            <span className="px-2.5 py-1 rounded bg-sky-500/20 text-sky-300 border border-sky-500/40 font-mono text-[11px] font-bold shrink-0">
+              Active
+            </span>
+          </div>
+
           {/* Android Permissions Configured */}
           <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3.5 space-y-2">
             <div className="font-bold text-white text-xs">

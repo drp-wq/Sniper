@@ -9,6 +9,7 @@
     "ui": "node src/ui.js",
     "build:dashboard": "bash scripts/build-dashboard.sh",
     "build:apk": "bash scripts/build-apk.sh",
+    "telegram:setup": "node scripts/setup-telegram.js",
     "test": "node --test"
   }
 }
