@@ -242,7 +242,12 @@ button{background:var(--btn);color:var(--btnfg);border:0;border-radius:8px;paddi
 const json = (o, status = 200) =>
   new Response(JSON.stringify(o), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      "access-control-allow-origin": "*",
+      "access-control-allow-methods": "GET, POST, OPTIONS",
+      "access-control-allow-headers": "content-type, x-key, x-init, x-target-url",
+    },
   });
 
 function redactWorkerError(err, env = {}) {
@@ -917,8 +922,46 @@ function getQueueStub(env) {
 
 export default {
   async fetch(req, env) {
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+          "access-control-allow-headers": "content-type, x-key, x-init, x-target-url",
+        },
+      });
+    }
+
     const url = new URL(req.url);
     const path = url.pathname;
+
+    // Browser CORS proxy for Solana RPC & external endpoints
+    if (path === "/api/proxy") {
+      const targetUrl = req.headers.get("x-target-url") || url.searchParams.get("url");
+      if (!targetUrl) return json({ error: "missing_target" }, 400);
+      try {
+        const body = (req.method === "POST" || req.method === "PUT") ? await req.text() : undefined;
+        const targetRes = await fetch(targetUrl, {
+          method: req.method,
+          headers: {
+            "content-type": "application/json",
+            ...(req.headers.get("x-key") ? { "x-key": req.headers.get("x-key") } : {}),
+          },
+          body,
+        });
+        const targetBody = await targetRes.text();
+        return new Response(targetBody, {
+          status: targetRes.status,
+          headers: {
+            "content-type": targetRes.headers.get("content-type") || "application/json",
+            "access-control-allow-origin": "*",
+          },
+        });
+      } catch (e) {
+        return json({ error: "proxy_failed", msg: String(e) }, 502);
+      }
+    }
 
     // Static Assets for Telegram Mini App / Web Terminal (if configured via wrangler [assets])
     if (env?.ASSETS) {

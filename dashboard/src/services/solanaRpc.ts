@@ -105,6 +105,8 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
         throw new Error(json.error.message || `RPC Error code ${json.error.code}`);
       }
       return json.result as T;
+    } else {
+      throw new Error(`HTTP ${res.status}: ${res.statusText}`);
     }
   } catch (err: any) {
     // If browser CORS or network failure, fallback to proxy

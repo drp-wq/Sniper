@@ -16,9 +16,9 @@ const STORAGE_KEYS = {
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
-  workerUrl: '',
-  appKey: '',
-  rpcUrl: 'https://api.mainnet-beta.solana.com',
+  workerUrl: typeof window !== 'undefined' ? window.location.origin : 'https://sniper-relay.pjdebnath01.workers.dev',
+  appKey: '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+  rpcUrl: 'https://solana-rpc.publicnode.com',
   pollIntervalMs: 3000,
   priceIntervalMs: 5000,
   maxOpen: 5,
@@ -65,8 +65,33 @@ export const StorageService = {
       const bridge = typeof window !== 'undefined' ? (window as any).AndroidBridge : null;
       const bridgeRaw = bridge && typeof bridge.loadConfig === 'function' ? bridge.loadConfig() : '';
       const raw = bridgeRaw || localStorage.getItem(STORAGE_KEYS.CONFIG);
-      if (!raw) return { ...DEFAULT_CONFIG };
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      const parsed = raw ? JSON.parse(raw) : {};
+
+      const isBrowser = typeof window !== 'undefined';
+      const autoWorker =
+        isBrowser && window.location.origin && window.location.origin.startsWith('http')
+          ? window.location.origin
+          : 'https://sniper-relay.pjdebnath01.workers.dev';
+
+      const config: AppConfig = {
+        ...DEFAULT_CONFIG,
+        ...parsed,
+      };
+
+      if (!config.workerUrl) {
+        config.workerUrl = autoWorker;
+      }
+      if (!config.appKey) {
+        config.appKey = '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618';
+      }
+      if (
+        !config.rpcUrl ||
+        config.rpcUrl.includes('api.mainnet-beta.solana.com') ||
+        config.rpcUrl.includes('ab2f55ad-885a-44dc-8084-651a6530b26c')
+      ) {
+        config.rpcUrl = 'https://solana-rpc.publicnode.com';
+      }
+      return config;
     } catch {
       return { ...DEFAULT_CONFIG };
     }
