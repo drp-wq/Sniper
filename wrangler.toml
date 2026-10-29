@@ -1,26 +1,8 @@
-# Reproducible Cloudflare Worker configuration for sniper-relay (paper-only).
-# Secrets (APP_KEY, HELIUS_AUTH, optional TG_TOKEN, TG_CHAT) are configured via
-# `npx wrangler secret put <NAME>` and MUST NEVER be placed in this file.
-
 name = "sniper-relay"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
-[assets]
-directory = "./app/assets"
-binding = "ASSETS"
-
-[[durable_objects.bindings]]
-name = "SIGNAL_QUEUE"
-class_name = "SignalQueueDO"
-
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["SignalQueueDO"]
-
-# Legacy KV namespace retained for automatic one-time migration into SignalQueueDO
-# and lossless rollback via GET /export-kv.
 [[kv_namespaces]]
 binding = "KV"
 id = "45cb5b16318f4534bce256f6d1fa9d5d"
