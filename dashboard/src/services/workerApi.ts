@@ -244,4 +244,25 @@ export const WorkerApi = {
       config
     );
   },
+
+  /**
+   * POST {WORKER_URL}/api/telegram-config
+   * Body: { tgToken: string, tgChat: string }
+   */
+  async saveTelegramConfig(
+    config: AppConfig,
+    tgToken: string,
+    tgChat: string
+  ): Promise<FetchResult<{ ok: boolean; sent?: boolean }>> {
+    const base = getBaseUrl(config);
+    const url = `${base}/api/telegram-config`;
+    return requestWithFallback<{ ok: boolean; sent?: boolean }>(
+      url,
+      {
+        method: 'POST',
+        body: JSON.stringify({ tgToken, tgChat }),
+      },
+      config
+    );
+  },
 };

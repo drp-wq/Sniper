@@ -10,6 +10,7 @@
     "report": "node src/report.js",
     "test": "node --test test/*.test.js",
     "test:telegram": "node scripts/verify-telegram.js",
+    "scanner": "node src/scanner.js",
     "sim": "node scripts/simulate.js"
   }
 }

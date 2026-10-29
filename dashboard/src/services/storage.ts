@@ -35,6 +35,8 @@ export const DEFAULT_CONFIG: AppConfig = {
   stakeUsdDefault: 100,
   soundAlerts: true,
   wakeLockEnabled: true,
+  tgToken: '',
+  tgChat: '',
 };
 
 export function maskSecret(secret?: string, visibleChars = 4): string {

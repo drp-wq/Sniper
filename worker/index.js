@@ -261,14 +261,24 @@ function redactWorkerError(err, env = {}) {
 }
 
 export async function tg(env, text, deps = {}) {
-  if (!env?.TG_TOKEN || !env?.TG_CHAT) return false;
+  let token = env?.TG_TOKEN;
+  let chat = env?.TG_CHAT;
+
+  if ((!token || !chat) && env?.KV) {
+    try {
+      if (!token) token = await env.KV.get("config:tg_token");
+      if (!chat) chat = await env.KV.get("config:tg_chat");
+    } catch {}
+  }
+
+  if (!token || !chat) return false;
   const fetchFn = deps.fetch ?? fetch;
   try {
-    const res = await fetchFn(`https://api.telegram.org/bot${env.TG_TOKEN}/sendMessage`, {
+    const res = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        chat_id: env.TG_CHAT,
+        chat_id: chat,
         text: String(text).slice(0, 3500),
       }),
     });
@@ -1128,6 +1138,22 @@ export default {
       return json({ ok: true, sent: Boolean(sent) });
     }
 
+    if (path === "/api/telegram-config" && req.method === "POST") {
+      const body = await req.json().catch(() => ({}));
+      const tgToken = body?.tgToken ? String(body.tgToken).trim() : "";
+      const tgChat = body?.tgChat ? String(body.tgChat).trim() : "";
+
+      if (tgToken && env.KV) {
+        await env.KV.put("config:tg_token", tgToken);
+      }
+      if (tgChat && env.KV) {
+        await env.KV.put("config:tg_chat", tgChat);
+      }
+
+      const sent = await tg(env, "🎯 Solana Sniper Telegram Relay Activated!\nAlerts are now enabled for all footprints (signals, gates, paper trades, exits, and heartbeats).");
+      return json({ ok: true, sent: Boolean(sent) });
+    }
+
     return json({ error: "not found" }, 404);
   },
 
@@ -1141,6 +1167,62 @@ export default {
       return;
     }
     if (!env?.KV) return;
+
+    // 1. Live Solana Token Discovery: automatically queue live tokens from DexScreener
+    const isTest = typeof process !== "undefined" && (
+      process.env?.NODE_ENV === "test" ||
+      process.env?.NODE_TEST_CONTEXT !== undefined ||
+      process.execArgv?.some((arg) => arg.startsWith("--test"))
+    );
+
+    if (!isTest) {
+      try {
+        const res = await fetch("https://api.dexscreener.com/token-profiles/latest/v1", {
+          headers: { "accept": "application/json" },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (res.ok) {
+          const tokens = await res.json();
+          const solMints = (tokens || [])
+            .filter((t) => t.chainId === "solana" && typeof t.tokenAddress === "string")
+            .map((t) => t.tokenAddress);
+
+          if (solMints.length > 0) {
+            await withKvMutex(env.KV, async () => {
+              const q = await readKvQ(env);
+              let changed = false;
+              const newMints = [];
+
+              for (const mint of solMints.slice(0, 3)) {
+                if (q.items.some((i) => i.mint === mint)) continue;
+                q.seq += 1;
+                q.items.push({
+                  id: q.seq,
+                  mint,
+                  sig: `dex_${Date.now()}`,
+                  ts: Date.now(),
+                });
+                newMints.push(mint);
+                changed = true;
+              }
+
+              if (changed) {
+                q.items = q.items.slice(-QMAX);
+                await env.KV.put("queue", JSON.stringify(q));
+                for (const m of newMints) {
+                  await tg(
+                    env,
+                    `📡 LIVE DISCOVERY: ${m}\nDiscovered via DexScreener Scanner at ${new Date().toLocaleTimeString()}`
+                  );
+                }
+              }
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Watchdog / Phone Heartbeat monitor
     const hb = await env.KV.get("hb", "json").catch(() => null);
     if (!hb) return;
     const late = Date.now() - hb.ts > HB_LATE_MS;

@@ -399,18 +399,15 @@ export class SniperEngine {
     if (signalAgeMs !== null && signalAgeMs > MAX_SIGNAL_AGE_MS) {
       logItem.skipReason = 'stale_signal';
       this.recordSignalLog(logItem);
+      WorkerApi.sendNotify(this.config, `⚠️ [GUARDIAN VETO] Stale signal: ${signal.mint} (Age: ${Math.round(signalAgeMs / 1000)}s > 60s)`);
       return logItem;
     }
 
     // Check 2: Local or Remote Halt
-    if (this.isLocalHalted) {
-      logItem.skipReason = 'local_halt';
+    if (this.isLocalHalted || this.isRemoteHalted) {
+      logItem.skipReason = this.isLocalHalted ? 'local_halt' : 'remote_halt';
       this.recordSignalLog(logItem);
-      return logItem;
-    }
-    if (this.isRemoteHalted) {
-      logItem.skipReason = 'remote_halt';
-      this.recordSignalLog(logItem);
+      WorkerApi.sendNotify(this.config, `🛑 [KILL SWITCH ENGAGED] Signal skipped: ${signal.mint}`);
       return logItem;
     }
 
@@ -425,6 +422,7 @@ export class SniperEngine {
     if (this.openPositions.length >= this.config.maxOpen) {
       logItem.skipReason = 'skip_maxopen';
       this.recordSignalLog(logItem);
+      WorkerApi.sendNotify(this.config, `⚠️ [MAX OPEN POSITIONS] Skipped ${signal.mint} (Current: ${this.openPositions.length}/${this.config.maxOpen})`);
       return logItem;
     }
 
@@ -439,6 +437,10 @@ export class SniperEngine {
         logItem.skipReason = 'gate_rejected';
         logItem.rejectionReasons = gateVerdict.reasons;
         this.recordSignalLog(logItem);
+        WorkerApi.sendNotify(
+          this.config,
+          `🚫 GATE REJECTED: ${signal.mint}\nReasons:\n${gateVerdict.reasons.map(r => `• ${r}`).join('\n')}`
+        );
         return logItem;
       }
 
@@ -455,6 +457,10 @@ export class SniperEngine {
             : 'No valid Solana DexScreener quote pair found',
         ];
         this.recordSignalLog(logItem);
+        WorkerApi.sendNotify(
+          this.config,
+          `💧 LIQUIDITY REJECTED: ${signal.mint}\n${logItem.rejectionReasons.join('\n')}`
+        );
         return logItem;
       }
 
@@ -829,7 +835,27 @@ export class SniperEngine {
     };
 
     this.addToast('info', 'TEST SIGNAL INJECTED', `Auditing ${mint.slice(0, 6)}... through on-chain safety gate`);
+    WorkerApi.sendNotify(this.config, `🧪 [TEST SIGNAL] Injected ${mint} at ${new Date().toLocaleTimeString()}`).catch(() => {});
     return await this.processSignal(mockSig);
+  }
+
+  /**
+   * Save Telegram Bot Token and Chat ID to Worker KV
+   */
+  public async saveTelegramCredentials(
+    tgToken: string,
+    tgChat: string
+  ): Promise<{ ok: boolean; sent?: boolean; error?: string }> {
+    this.config.tgToken = tgToken;
+    this.config.tgChat = tgChat;
+    StorageService.saveConfig(this.config);
+    const res = await WorkerApi.saveTelegramConfig(this.config, tgToken, tgChat);
+    if (res.data?.ok) {
+      this.addToast('buy', 'TELEGRAM ACTIVATED', 'Telegram bot alerts saved and activated on Worker!');
+      return { ok: true, sent: res.data.sent };
+    }
+    this.addToast('warn', 'TELEGRAM CONFIG ERROR', res.error || 'Failed to save Telegram credentials');
+    return { ok: false, error: res.error };
   }
 
   /**

@@ -49,13 +49,64 @@ export function inspectMintExtensions(info) {
   return [...new Set(reasons)];
 }
 
+export function extractSolanaAddress(input) {
+  if (!input) return "";
+  const trimmed = String(input).trim();
+  const m = trimmed.match(/(?:solana\/|coin\/|token\/|address\/|^)([1-9A-HJ-NP-Za-km-z]{32,44})/);
+  if (m && m[1]) return m[1];
+  const clean = trimmed.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  return clean ? clean[0] : trimmed;
+}
+
+// Helper to decode raw 82-byte SPL Mint if RPC returns base64 instead of jsonParsed
+function parseRawMintAccount(data) {
+  if (data?.parsed && data.parsed.type === "mint") {
+    return data.parsed.info;
+  }
+  let b64 = "";
+  if (Array.isArray(data) && typeof data[0] === "string") b64 = data[0];
+  else if (typeof data === "string") b64 = data;
+  if (!b64) return null;
+
+  try {
+    const buf = Buffer.from(b64, "base64");
+    if (buf.length < 82) return null;
+
+    const mintAuthOption = buf.readUInt32LE(0);
+    const mintAuthority = mintAuthOption === 0 ? null : "active";
+    const rawSupply = buf.readBigUInt64LE(36);
+    const decimals = buf.readUInt8(44);
+    const isInitialized = buf.readUInt8(45) !== 0;
+    const freezeAuthOption = buf.readUInt32LE(46);
+    const freezeAuthority = freezeAuthOption === 0 ? null : "active";
+
+    return {
+      mintAuthority,
+      freezeAuthority,
+      isInitialized,
+      supply: rawSupply.toString(),
+      decimals,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // Returns { pass, reasons[], top10Pct }. Any failed check rejects the token.
 export async function runGate(mint, gateCfg, rpcFn = rpc) {
   const reasons = [];
+  const cleanMint = extractSolanaAddress(mint);
 
   // 1) Authorities must be revoked.
-  const acc = await rpcFn("getAccountInfo", [mint, { encoding: "jsonParsed" }]);
-  const info = acc?.value?.data?.parsed?.info;
+  let acc;
+  try {
+    acc = await rpcFn("getAccountInfo", [cleanMint, { encoding: "jsonParsed" }]);
+  } catch (err) {
+    return { pass: false, reasons: [`RPC query error: ${err.message || 'unreachable'}`], top10Pct: null };
+  }
+
+  const data = acc?.value?.data;
+  const info = data?.parsed?.info || parseRawMintAccount(data);
   if (!info) return { pass: false, reasons: ["not a parsed SPL mint"], top10Pct: null };
   if (info.mintAuthority) reasons.push("mint authority not revoked");
   if (info.freezeAuthority) reasons.push("freeze authority not revoked");

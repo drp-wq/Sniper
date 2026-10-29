@@ -23,6 +23,8 @@ export interface AppConfig {
   stakeUsdDefault: number;      // default 100 ($)
   soundAlerts: boolean;
   wakeLockEnabled: boolean;
+  tgToken?: string;             // Optional Telegram Bot Token for direct relay
+  tgChat?: string;              // Optional Telegram Chat ID for alerts
 }
 
 export interface ToastMessage {

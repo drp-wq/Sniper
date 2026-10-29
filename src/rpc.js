@@ -54,7 +54,7 @@ const RETRYABLE_RPC_CODES = new Set([429, -32005, -32016]);
 
 export async function rpc(method, params, deps = {}) {
   const fetchFn = deps.fetch ?? fetch;
-  const rpcUrl = deps.rpcUrl ?? cfg.rpcUrl;
+  let rpcUrl = deps.rpcUrl ?? cfg.rpcUrl;
   const extraSecrets = [rpcUrl, ...(deps.extraSecrets ?? [])];
   const isTest =
     process.env.NODE_ENV === "test" ||
@@ -83,6 +83,10 @@ export async function rpc(method, params, deps = {}) {
         signal: AbortSignal.timeout(8000),
       });
     } catch (e) {
+      if (rpcUrl !== "https://solana-rpc.publicnode.com" && !isTest) {
+        rpcUrl = "https://solana-rpc.publicnode.com";
+        continue;
+      }
       const rawMsg = e?.cause?.message ? `${e.message} (${e.cause.message})` : (e?.message || String(e));
       lastErr = new Error(`${method}: network error: ${redactSecrets(rawMsg, extraSecrets)}`);
       lastErr.retryable = true;
@@ -101,6 +105,10 @@ export async function rpc(method, params, deps = {}) {
 
     if (!r.ok) {
       const status = Number(r.status);
+      if ((status === 401 || status === 403) && rpcUrl !== "https://solana-rpc.publicnode.com" && !isTest) {
+        rpcUrl = "https://solana-rpc.publicnode.com";
+        continue;
+      }
       lastErr = new Error(`${method}: HTTP ${r.status}`);
       lastErr.retryable = RETRYABLE_HTTP_STATUS.has(status);
       if (lastErr.retryable && attempt < maxAttempts) {

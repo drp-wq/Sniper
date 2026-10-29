@@ -72,6 +72,63 @@ export function getEffectiveRpcUrl(rpcUrl?: string): string {
   return trimmed;
 }
 
+export function extractSolanaAddress(input: string): string {
+  if (!input) return '';
+  const trimmed = input.trim();
+  const m = trimmed.match(/(?:solana\/|coin\/|token\/|address\/|^)([1-9A-HJ-NP-Za-km-z]{32,44})/);
+  if (m && m[1]) return m[1];
+  const clean = trimmed.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  return clean ? clean[0] : trimmed;
+}
+
+function parseRawMintAccount(data: any): { isMint: boolean; info?: any } {
+  if (data?.parsed && data.parsed.type === 'mint') {
+    return { isMint: true, info: data.parsed.info };
+  }
+  let b64 = '';
+  if (Array.isArray(data) && typeof data[0] === 'string') {
+    b64 = data[0];
+  } else if (typeof data === 'string') {
+    b64 = data;
+  }
+  if (!b64) return { isMint: false };
+
+  try {
+    const raw = atob(b64);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+    if (bytes.length < 82) return { isMint: false };
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const mintAuthOption = view.getUint32(0, true);
+    const mintAuthority = mintAuthOption === 0 ? null : 'active';
+
+    const supplyLow = view.getUint32(36, true);
+    const supplyHigh = view.getUint32(40, true);
+    const rawSupply = (BigInt(supplyHigh) << 32n) | BigInt(supplyLow);
+
+    const decimals = view.getUint8(44);
+    const isInitialized = view.getUint8(45) !== 0;
+
+    const freezeAuthOption = view.getUint32(46, true);
+    const freezeAuthority = freezeAuthOption === 0 ? null : 'active';
+
+    return {
+      isMint: true,
+      info: {
+        mintAuthority,
+        freezeAuthority,
+        isInitialized,
+        supply: rawSupply.toString(),
+        decimals,
+      },
+    };
+  } catch {
+    return { isMint: false };
+  }
+}
+
 async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promise<T> {
   const targetRpc = getEffectiveRpcUrl(rpcUrl);
   const payload = {
@@ -104,6 +161,11 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
     }
   }
 
+  const proxyUrl =
+    typeof window !== 'undefined' && window.location.origin && window.location.origin.includes('workers.dev')
+      ? `${window.location.origin}/api/proxy`
+      : 'https://sniper-relay.pjdebnath01.workers.dev/api/proxy';
+
   // 1. Direct fetch
   try {
     const res = await fetch(targetRpc, {
@@ -124,7 +186,7 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
   } catch (err: any) {
     // If browser CORS or network failure, fallback to proxy
     try {
-      const proxyRes = await fetch('/api/proxy', {
+      const proxyRes = await fetch(proxyUrl, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
@@ -170,10 +232,11 @@ export const SolanaRpc = {
    */
   async runOnChainGate(
     config: AppConfig,
-    mint: string,
+    inputMint: string,
     deps: { callRpc?: <T>(rpcUrl: string, method: string, params: any[]) => Promise<T> } = {}
   ): Promise<GateVerdict> {
     const callRpcFn = deps.callRpc ?? callRpc;
+    let mint = extractSolanaAddress(inputMint);
     const steps: GateStepResult[] = [];
     const reasons: string[] = [];
     let passed = true;
@@ -188,10 +251,35 @@ export const SolanaRpc = {
 
     // Step 1: getAccountInfo with jsonParsed
     try {
-      const accountInfoRes = await callRpcFn<any>(config.rpcUrl, 'getAccountInfo', [
+      let accountInfoRes = await callRpcFn<any>(config.rpcUrl, 'getAccountInfo', [
         mint,
         { encoding: 'jsonParsed', commitment: 'confirmed' },
       ]);
+
+      // If not found or not a mint, check if the input was a DEX pair address (e.g. Raydium/Orca)
+      let rawData = accountInfoRes?.value?.data;
+      let rawParsed = parseRawMintAccount(rawData);
+
+      if (!accountInfoRes?.value || (!rawParsed.isMint && rawData?.parsed?.type !== 'mint')) {
+        try {
+          const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${mint}`);
+          if (pairRes.ok) {
+            const pairJson = await pairRes.json();
+            const resolvedMint = pairJson.pairs?.[0]?.baseToken?.address || pairJson.pair?.baseToken?.address;
+            if (resolvedMint && resolvedMint !== mint) {
+              mint = resolvedMint;
+              accountInfoRes = await callRpcFn<any>(config.rpcUrl, 'getAccountInfo', [
+                mint,
+                { encoding: 'jsonParsed', commitment: 'confirmed' },
+              ]);
+              rawData = accountInfoRes?.value?.data;
+              rawParsed = parseRawMintAccount(rawData);
+            }
+          }
+        } catch {
+          // ignore pair fallback error
+        }
+      }
 
       if (!accountInfoRes || !accountInfoRes.value) {
         reasons.push('Mint account does not exist or has 0 lamports');
@@ -213,12 +301,13 @@ export const SolanaRpc = {
       const ownerProgram = accountInfoRes.value.owner;
       isToken2022 = ownerProgram === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
-      if (!parsedData || parsedData.type !== 'mint') {
+      const info = parsedData?.info || rawParsed.info;
+      if (!info) {
         reasons.push(`Account is not a SPL mint (owner: ${ownerProgram})`);
         steps.push({
           step: 'Account Type',
           passed: false,
-          detail: `Type is ${parsedData?.type || 'unknown'}`,
+          detail: `Type is ${parsedData?.type || 'non-mint account'}`,
         });
         return {
           mint,
@@ -228,8 +317,6 @@ export const SolanaRpc = {
           checkedAt: Date.now(),
         };
       }
-
-      const info = parsedData.info || {};
       mintAuthority = info.mintAuthority || null;
       freezeAuthority = info.freezeAuthority || null;
       const isInitialized = info.isInitialized !== false;

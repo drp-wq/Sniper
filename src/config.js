@@ -67,7 +67,16 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
     dryRun: true,
     autoExecute: false,
     liveTradingEnabled: false,
-    rpcUrl: need("RPC_URL", "http://127.0.0.1:8899"),
+    rpcUrl: (() => {
+      const u = need("RPC_URL", "https://solana-rpc.publicnode.com");
+      if (
+        u.includes("ab2f55ad-885a-44dc-8084-651a6530b26c") ||
+        u.includes("api.mainnet-beta.solana.com")
+      ) {
+        return "https://solana-rpc.publicnode.com";
+      }
+      return u;
+    })(),
     workerUrl: need("WORKER_URL", "http://127.0.0.1:8787").replace(/\/$/, ""),
     appKey: need("APP_KEY", "test-app-key"),
     tgToken: env.TG_TOKEN ? String(env.TG_TOKEN).trim() : "",

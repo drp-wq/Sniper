@@ -17,6 +17,7 @@ function applyRules(rules) {
     const v = rules?.[k];
     if (Number.isFinite(v) && v !== cfg.rules[k]) {
       log("rule_change", { key: k, from: cfg.rules[k], to: v });
+      notify(`⚙️ RULE CHANGE\n${k}: ${cfg.rules[k]} ➔ ${v}`);
       cfg.rules[k] = v;
     }
   }
@@ -24,11 +25,19 @@ function applyRules(rules) {
 
 async function handle(s) {
   const lagMs = Date.now() - s.ts;   // relay delay: measure it, it is part of your real latency
+  notify(`📡 LIVE SIGNAL\nMint: ${s.mint}\nRelay Latency: ${lagMs}ms`);
+
   const g = await runGate(s.mint, cfg.gate);
   log("gate", { mint: s.mint, pass: g.pass, reasons: g.reasons, top10Pct: g.top10Pct, lagMs });
   recentGates.push({ mint: s.mint, pass: g.pass, reasons: g.reasons, ts: Date.now() });
   if (recentGates.length > 10) recentGates.shift();
-  if (g.pass && !isOpen(s.mint)) await openPaper(s.mint, s.sig);
+
+  if (g.pass) {
+    notify(`🛡️ GATE PASSED\nMint: ${s.mint}\nTop 10 Wallets: ${g.top10Pct}%\nAuthorities: Revoked & Clean`);
+    if (!isOpen(s.mint)) await openPaper(s.mint, s.sig);
+  } else {
+    notify(`🚫 GATE REJECTED\nMint: ${s.mint}\nReasons:\n${g.reasons.map((r) => `• ${r}`).join("\n")}`);
+  }
 }
 
 async function pollOnce() {
@@ -42,6 +51,7 @@ async function pollOnce() {
     const verdict = RiskGuardian.evaluate(s, { halt: halted });
     if (!verdict.allow) {
       log("guardian_skip", { mint: s.mint, reason: verdict.reason, explanation: verdict.explanation });
+      notify(`⚠️ RISK GUARDIAN VETO\nMint: ${s.mint}\nReason: ${verdict.reason}\n${verdict.explanation}`);
       continue;
     }
     handle(s).catch((e) => log("error", { where: "handle", msg: String(e) }));
