@@ -54,9 +54,12 @@ export async function openPaper(mint, sig, deps = {}) {
   const slPrice = entry * (1 - R.stopLoss / 100);
   const tpPrice = entry * (1 + R.takeProfit / 100);
   const trailArmPrice = entry * (1 + R.trailArm / 100);
+  const symbol = q.symbol || "TOKEN";
+  const name = q.name || "Token";
 
   positions.set(mint, {
     mint, sig, entry,
+    symbol, name,
     peak: entry,
     openedAt: now,
     liq0: q.liqUsd,
@@ -66,9 +69,10 @@ export async function openPaper(mint, sig, deps = {}) {
     realized: 0,       // pct points already banked (weighted)
     misses: 0,
   });
-  logFn("paper_open", { mint, entry, liqUsd: q.liqUsd, slPrice, tpPrice, trailArmPrice });
+  logFn("paper_open", { mint, symbol, name, entry, liqUsd: q.liqUsd, slPrice, tpPrice, trailArmPrice });
   notifyFn(
-    `🟢 [PAPER BUY] ${mint}\n` +
+    `🟢 [PAPER BUY] ${name} ($${symbol})\n` +
+    `Mint: ${mint}\n` +
     `💵 Entry: ${formatPrice(entry)} (Screen: ${formatPrice(q.price)} +${(cfg.entrySlip * 100).toFixed(0)}% slip)\n` +
     `🛑 Stop-Loss: ${formatPrice(slPrice)} (-${R.stopLoss}%)\n` +
     `🎯 Take-Profit: ${formatPrice(tpPrice)} (+${R.takeProfit}% | Sell 50%)\n` +
@@ -134,9 +138,10 @@ function close(p, reason, pct, deps = {}) {
   positions.delete(p.mint);
   dailyRealizedPnl += pnl;
   const heldSec = Math.round((now - p.openedAt) / 1000);
-  logFn("paper_close", { mint: p.mint, reason, pnl: Number(pnl.toFixed(2)), heldSec });
+  logFn("paper_close", { mint: p.mint, symbol: p.symbol, name: p.name, reason, pnl: Number(pnl.toFixed(2)), heldSec });
   notifyFn(
-    `🔴 [PAPER EXIT] ${p.mint}\n` +
+    `🔴 [PAPER EXIT] ${p.name || p.mint} (${p.symbol ? `$${p.symbol}` : p.mint})\n` +
+    `Mint: ${p.mint}\n` +
     `Reason: ${reason}\n` +
     `PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%\n` +
     `Held: ${heldSec}s`
@@ -175,7 +180,7 @@ export async function tick(deps = {}) {
         p.realized += 0.5 * res.pct;
         logFn("paper_partial", { mint: p.mint, reason: res.partial, pct: Number(res.pct.toFixed(1)) });
         notifyFn(
-          `💰 [PAPER 50% TP BANKED] ${p.mint}\n` +
+          `💰 [PAPER 50% TP BANKED] ${p.name || p.mint} ($${p.symbol || 'TOKEN'})\n` +
           `Gain: +${res.pct.toFixed(1)}%\n` +
           `Status: 50% position banked, trailing remaining 50%`
         );

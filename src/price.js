@@ -11,7 +11,14 @@ export async function getQuote(mint) {
     if (!pairs.length) return null;
     pairs.sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
     const p = pairs[0];
-    return { price: Number(p.priceUsd), liqUsd: p.liquidity?.usd ?? 0, pair: p.pairAddress };
+    const base = p.baseToken?.address === mint ? p.baseToken : (p.quoteToken?.address === mint ? p.quoteToken : p.baseToken);
+    return {
+      price: Number(p.priceUsd),
+      liqUsd: p.liquidity?.usd ?? 0,
+      pair: p.pairAddress,
+      symbol: base?.symbol || p.baseToken?.symbol || "UNKNOWN",
+      name: base?.name || p.baseToken?.name || "Unknown Token",
+    };
   } catch {
     return null;
   }

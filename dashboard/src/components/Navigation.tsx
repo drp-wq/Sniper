@@ -10,10 +10,11 @@ import {
   Radio,
   BarChart3,
   Settings,
+  Sparkles,
 } from 'lucide-react';
 import { TelegramService } from '../services/telegram';
 
-export type TabId = 'dashboard' | 'positions' | 'signals' | 'analytics' | 'settings';
+export type TabId = 'dashboard' | 'positions' | 'signals' | 'strategy' | 'analytics' | 'settings';
 
 interface NavigationProps {
   currentTab: TabId;
@@ -45,6 +46,11 @@ export const Navigation: React.FC<NavigationProps> = ({
       id: 'signals',
       label: 'Live Gate',
       icon: Radio,
+    },
+    {
+      id: 'strategy',
+      label: 'Strategy',
+      icon: Sparkles,
     },
     {
       id: 'analytics',

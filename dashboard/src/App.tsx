@@ -10,6 +10,7 @@ import { Navigation, TabId } from './components/Navigation';
 import { TabDashboard } from './components/TabDashboard';
 import { TabPositions } from './components/TabPositions';
 import { TabSignals } from './components/TabSignals';
+import { TabStrategy } from './components/TabStrategy';
 import { TabAnalytics } from './components/TabAnalytics';
 import { TabSettings } from './components/TabSettings';
 import { ApkModal } from './components/ApkModal';
@@ -51,6 +52,8 @@ export default function App() {
         return <TabPositions />;
       case 'signals':
         return <TabSignals />;
+      case 'strategy':
+        return <TabStrategy />;
       case 'analytics':
         return <TabAnalytics />;
       case 'settings':

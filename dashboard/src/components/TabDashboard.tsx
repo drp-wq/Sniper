@@ -288,6 +288,7 @@ export const TabDashboard: React.FC<TabDashboardProps> = ({ onNavigateToTab }) =
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-bold text-white text-sm">{pos.symbol}</span>
+                          <span className="text-zinc-300 text-xs">({pos.name})</span>
                           <span className="text-zinc-500 text-[11px]">
                             {pos.mint.slice(0, 4)}...{pos.mint.slice(-4)}
                           </span>
@@ -357,9 +358,10 @@ export const TabDashboard: React.FC<TabDashboardProps> = ({ onNavigateToTab }) =
                     className="p-2 rounded bg-zinc-900 border border-zinc-800 text-xs font-mono"
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-zinc-300 font-semibold truncate max-w-[140px]">
-                        {log.mint.slice(0, 6)}...{log.mint.slice(-4)}
-                      </span>
+                      <div className="flex items-center gap-1.5 truncate max-w-[180px]">
+                        <span className="text-white font-bold">{log.quote?.name || 'Detected Token'}</span>
+                        <span className="text-cyan-400 font-bold text-[10px]">(${log.quote?.symbol || log.mint.slice(0, 4)})</span>
+                      </div>
                       <span
                         className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
                           passed
