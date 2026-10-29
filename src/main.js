@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { cfg } from "./config.js";
 import { getSignals, heartbeat, notify } from "./api.js";
+import { RiskGuardian } from "./guardian.js";
 import { runGate } from "./gate.js";
-import { openPaper, tick, snapshot, isOpen } from "./paper.js";
+import { openPaper, tick, snapshot, isOpen, getDailyRealizedPnl } from "./paper.js";
 import { readRows, computeStats } from "./stats.js";
 import { log } from "./log.js";
 
@@ -38,7 +39,11 @@ async function pollOnce() {
   for (const s of signals) {
     if (seen.has(s.mint)) continue;
     seen.add(s.mint);
-    if (halted) { log("halted_skip", { mint: s.mint }); continue; }
+    const verdict = RiskGuardian.evaluate(s, { halt: halted });
+    if (!verdict.allow) {
+      log("guardian_skip", { mint: s.mint, reason: verdict.reason, explanation: verdict.explanation });
+      continue;
+    }
     handle(s).catch((e) => log("error", { where: "handle", msg: String(e) }));
   }
 }
@@ -55,7 +60,14 @@ async function pollLoop() {
 // Snapshot for the Mini App + watchdog. Written every 3 min (KV free tier has a daily write cap).
 function sendHeartbeat() {
   try {
-    heartbeat({ open: snapshot(), stats: computeStats(readRows()), gates: recentGates, rules: cfg.rules });
+    heartbeat({
+      open: snapshot(),
+      stats: computeStats(readRows()),
+      gates: recentGates,
+      rules: cfg.rules,
+      dailyLoss: getDailyRealizedPnl(),
+      halted: existsSync("HALT"),
+    });
   } catch (e) {
     log("error", { where: "heartbeat", msg: String(e) });
   }

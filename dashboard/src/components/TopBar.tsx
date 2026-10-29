@@ -25,7 +25,7 @@ import { TelegramService } from '../services/telegram';
 interface TopBarProps {
   isMobilePreview: boolean;
   onToggleMobilePreview: () => void;
-  onOpenApkModal: () => void;
+  onOpenApkModal?: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -218,15 +218,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span>{isScannerActive ? 'SCANNING ON' : 'START SCAN'}</span>
             </button>
 
-            {/* APK / Mobile Modal Button */}
-            <button
-              onClick={onOpenApkModal}
-              className="flex items-center gap-1 px-2 py-1 rounded bg-indigo-950/60 border border-indigo-700/60 text-indigo-300 hover:bg-indigo-900/60 transition-colors cursor-pointer"
-              title="Android APK Build & Capacitor Packaging"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">APK</span>
-            </button>
+            {/* APK Modal button suppressed per Telegram Mini App delivery priority */}
 
             {/* Mobile Viewport Toggle */}
             <button

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tg } from "../worker/index.js";
+import { tg, authenticateTelegram, getRole, authorizeAction, checkRateLimit, resetRateLimits } from "../worker/index.js";
 import { sendTelegram, notify } from "../src/api.js";
 import { loadConfig } from "../src/config.js";
 import { redactSecrets } from "../src/rpc.js";
@@ -181,4 +181,108 @@ test("redactSecrets sanitizes TG_TOKEN and TG_CHAT from logs and error messages"
   assert.ok(!sanitized.includes(secretToken), "secretToken must not be visible in sanitized text");
   assert.ok(!sanitized.includes(secretChat), "secretChat must not be visible in sanitized text");
   assert.ok(sanitized.includes("[REDACTED]"), "Sanitized text must contain redaction placeholder");
+});
+
+async function createSignedInitData(botToken, user, authDate = Math.floor(Date.now() / 1000)) {
+  const enc = new TextEncoder();
+  const params = new URLSearchParams();
+  params.set("auth_date", String(authDate));
+  params.set("query_id", "AAG_test_456");
+  params.set("user", typeof user === "string" ? user : JSON.stringify(user));
+
+  const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join("\n");
+
+  const secretKey = await crypto.subtle.importKey(
+    "raw",
+    enc.encode("WebAppData"),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const secret = await crypto.subtle.sign("HMAC", secretKey, enc.encode(botToken));
+  const dataKey = await crypto.subtle.importKey(
+    "raw",
+    secret,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sigBytes = await crypto.subtle.sign("HMAC", dataKey, enc.encode(dcs));
+  const hash = [...new Uint8Array(sigBytes)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  params.set("hash", hash);
+  return params.toString();
+}
+
+test("authenticateTelegram extracts verified user and rejects tampered or expired data", async () => {
+  const env = { TG_TOKEN: "987654:TEST_TOKEN_XYZ", TG_CHAT: "123456" };
+  const user = { id: 123456, first_name: "Alice", username: "alice_bot" };
+  const validInit = await createSignedInitData(env.TG_TOKEN, user);
+
+  // Valid
+  const res = await authenticateTelegram(env, validInit);
+  assert.equal(res.ok, true);
+  assert.equal(res.user.id, "123456");
+  assert.equal(res.user.firstName, "Alice");
+
+  // Tampered
+  const tampered = validInit.replace(/hash=[a-f0-9]{4}/, "hash=0000");
+  const resTampered = await authenticateTelegram(env, tampered);
+  assert.equal(resTampered.ok, false);
+  assert.equal(resTampered.error, "invalid_signature");
+
+  // Missing user
+  const noUserParams = new URLSearchParams(validInit);
+  noUserParams.delete("user");
+  const resNoUser = await authenticateTelegram(env, noUserParams.toString());
+  assert.equal(resNoUser.ok, false);
+});
+
+test("getRole assigns roles accurately and fails closed on unknown users", () => {
+  const env = {
+    TG_CHAT: "1001",
+    TG_OPERATORS: "2001, 2002",
+    TG_VIEWERS: "3001, 3002",
+  };
+
+  assert.equal(getRole(env, "1001"), "admin");
+  assert.equal(getRole(env, 2001), "operator");
+  assert.equal(getRole(env, "2002"), "operator");
+  assert.equal(getRole(env, "3001"), "viewer");
+  assert.equal(getRole(env, "9999"), null); // Unknown user denied
+  assert.equal(getRole({}, "1001"), null); // Missing config fails closed
+});
+
+test("authorizeAction enforces strict role allowlist and blocks privilege escalation", () => {
+  // Viewer
+  assert.equal(authorizeAction("viewer", "read_state"), true);
+  assert.equal(authorizeAction("viewer", "halt"), false);
+  assert.equal(authorizeAction("viewer", "update_rules"), false);
+
+  // Operator
+  assert.equal(authorizeAction("operator", "halt"), true);
+  assert.equal(authorizeAction("operator", "close_position"), true);
+  assert.equal(authorizeAction("operator", "update_rules"), false);
+
+  // Admin
+  assert.equal(authorizeAction("admin", "update_rules"), true);
+  assert.equal(authorizeAction("admin", "update_settings"), true);
+  assert.equal(authorizeAction("admin", "arbitrary_cmd"), false); // Unknown action denied
+});
+
+test("checkRateLimit blocks requests that exceed window threshold", () => {
+  resetRateLimits();
+  const key = "user-123";
+  const opt = { limit: 2, windowMs: 10000 };
+
+  const r1 = checkRateLimit(key, opt);
+  assert.equal(r1.allowed, true);
+  assert.equal(r1.remaining, 1);
+
+  const r2 = checkRateLimit(key, opt);
+  assert.equal(r2.allowed, true);
+  assert.equal(r2.remaining, 0);
+
+  const r3 = checkRateLimit(key, opt);
+  assert.equal(r3.allowed, false);
+  assert.equal(r3.remaining, 0);
 });

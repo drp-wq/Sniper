@@ -5,10 +5,16 @@ import { notify } from "./api.js";
 
 const R = cfg.rules;
 const positions = new Map(); // mint -> position
+let dailyRealizedPnl = 0;
 
 export const openCount = () => positions.size;
 export const isOpen = (mint) => positions.has(mint);
-export const resetPositions = () => positions.clear();
+export const resetPositions = () => {
+  positions.clear();
+  dailyRealizedPnl = 0;
+};
+export const getDailyRealizedPnl = () => dailyRealizedPnl;
+export const resetDailyRealizedPnl = () => { dailyRealizedPnl = 0; };
 
 // Compact view of open positions for the Mini App.
 export const snapshot = () =>
@@ -87,9 +93,17 @@ function close(p, reason, pct, deps = {}) {
   const weight = p.tookHalf ? 0.5 : 1;
   const pnl = p.realized + weight * pct;
   positions.delete(p.mint);
+  dailyRealizedPnl += pnl;
   const heldSec = Math.round((now - p.openedAt) / 1000);
   logFn("paper_close", { mint: p.mint, reason, pnl: Number(pnl.toFixed(2)), heldSec });
   notifyFn(`PAPER EXIT ${p.mint}\n${reason}  pnl ${pnl.toFixed(1)}%  held ${heldSec}s`);
+}
+
+export function closePaperPosition(mint, reason = "manual_close", deps = {}) {
+  const p = positions.get(mint);
+  if (!p) return false;
+  close(p, reason, p.lastPct ?? 0, deps);
+  return true;
 }
 
 let busy = false;

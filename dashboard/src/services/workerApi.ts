@@ -6,6 +6,7 @@
  */
 
 import type { AppConfig, SignalsResponse, WorkerExportKv } from '../types/index.ts';
+import { TelegramService } from './telegram.ts';
 
 interface FetchResult<T> {
   data: T | null;
@@ -24,6 +25,10 @@ async function requestWithFallback<T>(
   };
   if (config.appKey) {
     headers['x-key'] = config.appKey;
+  }
+  const initData = TelegramService.getWebApp()?.initData;
+  if (initData) {
+    headers['x-init'] = initData;
   }
 
   // 0. If running inside our native Android APK WebView with AndroidBridge, use native Java HttpURLConnection
@@ -148,12 +153,40 @@ export const WorkerApi = {
   },
 
   /**
-   * POST {WORKER_URL}/halt?on={1|0}
+   * POST {WORKER_URL}/api/halt?on={1|0} (or /halt?on={1|0})
    */
   async toggleHalt(config: AppConfig, haltOn: boolean): Promise<FetchResult<{ halt: boolean }>> {
     const base = config.workerUrl.replace(/\/+$/, '');
-    const url = `${base}/halt?on=${haltOn ? 1 : 0}`;
+    const initData = TelegramService.getWebApp()?.initData;
+    const url = initData ? `${base}/api/halt?on=${haltOn ? 1 : 0}` : `${base}/halt?on=${haltOn ? 1 : 0}`;
     return requestWithFallback<{ halt: boolean }>(url, { method: 'POST' }, config);
+  },
+
+  /**
+   * GET {WORKER_URL}/api/state
+   */
+  async getState(config: AppConfig): Promise<FetchResult<any>> {
+    const base = config.workerUrl.replace(/\/+$/, '');
+    const url = `${base}/api/state`;
+    return requestWithFallback<any>(url, { method: 'GET' }, config);
+  },
+
+  /**
+   * POST {WORKER_URL}/api/rules
+   */
+  async setRules(config: AppConfig, rules: Record<string, number>): Promise<FetchResult<any>> {
+    const base = config.workerUrl.replace(/\/+$/, '');
+    const url = `${base}/api/rules`;
+    return requestWithFallback<any>(url, { method: 'POST', body: JSON.stringify(rules) }, config);
+  },
+
+  /**
+   * GET {WORKER_URL}/api/audit
+   */
+  async getAudit(config: AppConfig): Promise<FetchResult<any>> {
+    const base = config.workerUrl.replace(/\/+$/, '');
+    const url = `${base}/api/audit`;
+    return requestWithFallback<any>(url, { method: 'GET' }, config);
   },
 
   /**

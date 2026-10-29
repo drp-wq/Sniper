@@ -14,6 +14,231 @@ const DEDUP_MAX = 1000;             // keep the last 1000 (sig, mint) pairs for 
 const HB_LATE_MS = 12 * 60 * 1000;  // alert if the phone is silent this long
 const HB_MIN_WRITE_MS = 5 * 60 * 1000; // throttle unchanged heartbeat writes
 
+// Editable from the Mini App. [min, max] per rule; anything else is rejected.
+export const RULE_LIMITS = {
+  stopLoss: [1, 95], bandDown: [0, 50], bandUp: [0, 100], timeStopSec: [10, 3600],
+  maxHoldMin: [1, 720], takeProfit: [10, 1000], trailArm: [10, 1000], trail: [1, 90], liqDrop: [5, 95],
+};
+
+export function cleanRules(input) {
+  const out = {};
+  for (const [k, [lo, hi]] of Object.entries(RULE_LIMITS)) {
+    const v = Number(input?.[k]);
+    if (input && k in input && Number.isFinite(v) && v >= lo && v <= hi) out[k] = v;
+  }
+  return out;
+}
+
+export async function timingSafeEqualString(provided, expected) {
+  if (typeof provided !== "string" || typeof expected !== "string" || !provided || !expected) {
+    return false;
+  }
+  const enc = new TextEncoder();
+  const [hashA, hashB] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(provided)),
+    crypto.subtle.digest("SHA-256", enc.encode(expected)),
+  ]);
+  const a = new Uint8Array(hashA);
+  const b = new Uint8Array(hashB);
+  let diff = 0;
+  for (let i = 0; i < 32; i++) {
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0 && provided.length === expected.length;
+}
+
+const replayCache = new Map();
+const MAX_REPLAY_ENTRIES = 5000;
+
+function pruneReplayCache(now) {
+  if (replayCache.size > MAX_REPLAY_ENTRIES) {
+    for (const [hash, exp] of replayCache.entries()) {
+      if (exp <= now) replayCache.delete(hash);
+    }
+  }
+}
+
+async function hmacSha256(keyBytes, data) {
+  const key = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
+}
+
+export async function authenticateTelegram(env, initData, { maxAgeSec = 86400, replayCheck = false } = {}) {
+  if (!initData || typeof initData !== "string") {
+    return { ok: false, error: "missing_init_data" };
+  }
+  if (!env?.TG_TOKEN) {
+    return { ok: false, error: "unconfigured_server_credentials" };
+  }
+
+  const params = new URLSearchParams(initData);
+  const hash = params.get("hash");
+  if (!hash) {
+    return { ok: false, error: "missing_hash" };
+  }
+  params.delete("hash");
+
+  const authDateStr = params.get("auth_date");
+  if (!authDateStr) {
+    return { ok: false, error: "missing_auth_date" };
+  }
+  const authDate = Number(authDateStr);
+  const nowSec = Date.now() / 1000;
+  if (!Number.isFinite(authDate)) {
+    return { ok: false, error: "invalid_auth_date" };
+  }
+  if (authDate > nowSec + 300) {
+    return { ok: false, error: "future_auth_date" };
+  }
+  if (nowSec - authDate > maxAgeSec) {
+    return { ok: false, error: "stale_auth_date" };
+  }
+
+  const userStr = params.get("user");
+  if (!userStr) {
+    return { ok: false, error: "missing_user" };
+  }
+  let user;
+  try {
+    user = JSON.parse(userStr);
+  } catch {
+    return { ok: false, error: "malformed_user" };
+  }
+  if (!user || (typeof user.id !== "number" && typeof user.id !== "string") || !String(user.id).trim()) {
+    return { ok: false, error: "invalid_user_id" };
+  }
+
+  const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join("\n");
+  const secret = await hmacSha256(new TextEncoder().encode("WebAppData"), env.TG_TOKEN);
+  const sig = [...(await hmacSha256(secret, dcs))].map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  if (!(await timingSafeEqualString(sig, hash))) {
+    return { ok: false, error: "invalid_signature" };
+  }
+
+  if (replayCheck) {
+    const nowMs = Date.now();
+    pruneReplayCache(nowMs);
+    if (replayCache.has(hash)) {
+      return { ok: false, error: "replay_detected" };
+    }
+    replayCache.set(hash, (authDate + maxAgeSec) * 1000);
+  }
+
+  return {
+    ok: true,
+    user: {
+      id: String(user.id),
+      firstName: String(user.first_name || ""),
+      username: String(user.username || ""),
+    },
+    authDate,
+  };
+}
+
+export function getRole(env, userId) {
+  if (!userId || (typeof userId !== "string" && typeof userId !== "number")) return null;
+  const targetId = String(userId).trim();
+  if (!targetId) return null;
+
+  if (env?.TG_CHAT && targetId === String(env.TG_CHAT).trim()) {
+    return "admin";
+  }
+
+  if (env?.TG_OPERATORS) {
+    const ops = String(env.TG_OPERATORS).split(",").map((s) => s.trim()).filter(Boolean);
+    if (ops.includes(targetId)) return "operator";
+  }
+
+  if (env?.TG_VIEWERS) {
+    const viewers = String(env.TG_VIEWERS).split(",").map((s) => s.trim()).filter(Boolean);
+    if (viewers.includes(targetId)) return "viewer";
+  }
+
+  return null;
+}
+
+const ROLE_ACTIONS = {
+  viewer: new Set(["read_state", "read_signals", "read_positions", "read_stats", "read_audit"]),
+  operator: new Set(["read_state", "read_signals", "read_positions", "read_stats", "read_audit", "halt", "resume", "close_position", "close_all"]),
+  admin: new Set(["read_state", "read_signals", "read_positions", "read_stats", "read_audit", "halt", "resume", "close_position", "close_all", "update_rules", "update_settings"]),
+};
+
+export function authorizeAction(role, action) {
+  if (!role || !action || typeof role !== "string" || typeof action !== "string") return false;
+  const allowed = ROLE_ACTIONS[role];
+  return allowed ? allowed.has(action) : false;
+}
+
+const rateLimits = new Map();
+const RATE_LIMIT_MAX_KEYS = 5000;
+
+export function checkRateLimit(key, { limit = 60, windowMs = 60000 } = {}) {
+  if (!key) return { allowed: true, remaining: limit, resetMs: 0 };
+  const now = Date.now();
+  if (rateLimits.size > RATE_LIMIT_MAX_KEYS) {
+    for (const [k, v] of rateLimits.entries()) {
+      if (now > v.resetAt) rateLimits.delete(k);
+    }
+  }
+
+  let record = rateLimits.get(key);
+  if (!record || now > record.resetAt) {
+    record = { count: 1, resetAt: now + windowMs };
+    rateLimits.set(key, record);
+    return { allowed: true, remaining: limit - 1, resetMs: windowMs };
+  }
+
+  record.count++;
+  if (record.count > limit) {
+    return { allowed: false, remaining: 0, resetMs: Math.max(0, record.resetAt - now) };
+  }
+
+  return { allowed: true, remaining: limit - record.count, resetMs: Math.max(0, record.resetAt - now) };
+}
+
+export function resetRateLimits() {
+  rateLimits.clear();
+}
+
+export async function verifyInit(env, initData) {
+  const res = await authenticateTelegram(env, initData);
+  return res.ok && String(res.user?.id) === String(env?.TG_CHAT);
+}
+
+export async function recordAudit(env, entry) {
+  if (!env?.KV || typeof env.KV.get !== "function" || typeof env.KV.put !== "function") return;
+  try {
+    const list = (await env.KV.get("audit", "json")) ?? [];
+    const record = {
+      id: (list[0]?.id ?? 0) + 1,
+      ts: Date.now(),
+      actorId: String(entry.actorId || "unknown"),
+      role: String(entry.role || "unknown"),
+      action: String(entry.action || "unknown"),
+      target: String(entry.target || "system"),
+      result: String(entry.result || "success"),
+      detail: entry.detail ? JSON.parse(JSON.stringify(entry.detail)) : {},
+    };
+    list.unshift(record);
+    await env.KV.put("audit", JSON.stringify(list.slice(0, 100)));
+  } catch {
+    /* never throw on audit logging */
+  }
+}
+
+const APP_HTML = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<title>Sniper Panel</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+:root{--bg:var(--tg-theme-bg-color,#0B0F17);--fg:var(--tg-theme-text-color,#fff);--hint:var(--tg-theme-hint-color,#888);--card:#161D2A;--btn:#2481cc;--btnfg:#fff}
+*{box-sizing:border-box}body{margin:0;padding:12px;font:15px/1.4 -apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+.card{background:var(--card);border-radius:12px;padding:12px;margin-bottom:10px}h2{font-size:12px;text-transform:uppercase;color:var(--hint);margin:0 0 8px}
+.row{display:flex;justify-content:space-between;padding:4px 0}.good{color:#1a9f4b}.bad{color:#d93025}.hint{color:var(--hint)}
+button{background:var(--btn);color:var(--btnfg);border:0;border-radius:8px;padding:10px;width:100%;margin-top:8px;font-size:14px;font-weight:600}
+</style></head><body><div class="card" id="status"><h2>Control Plane (Paper-Only)</h2><div class="row"><span>Status</span><span class="good">Active</span></div></div></body></html>`;
+
 const json = (o, status = 200) =>
   new Response(JSON.stringify(o), {
     status,
@@ -435,7 +660,9 @@ export class SignalQueueDO {
 
       if (path === "/heartbeat" && req.method === "POST") {
         const b = await req.json().catch(() => ({}));
-        const open = Number.isFinite(Number(b?.open)) ? Math.floor(Number(b.open)) : 0;
+        const open = Array.isArray(b?.open)
+          ? b.open.length
+          : (Number.isFinite(Number(b?.open)) ? Math.floor(Number(b.open)) : 0);
         const now = Date.now();
 
         this._runTransaction(() => {
@@ -633,13 +860,24 @@ async function handleWithKvFallback(req, env) {
 
     if (path === "/heartbeat" && req.method === "POST") {
       const b = await req.json().catch(() => ({}));
-      const open = Number.isFinite(Number(b?.open)) ? Math.floor(Number(b.open)) : 0;
+      const open = Array.isArray(b?.open)
+        ? b.open.length
+        : (Number.isFinite(Number(b?.open)) ? Math.floor(Number(b.open)) : 0);
       const now = Date.now();
       const prev = kvHbCache.get(env.KV);
       const hasTelegram = Boolean(env.TG_TOKEN && env.TG_CHAT);
+      const payload = {
+        ts: now,
+        open,
+        ...(b?.dailyLoss !== undefined ? { dailyLoss: Number(b.dailyLoss) || 0 } : {}),
+        ...(b?.halted !== undefined ? { halted: Boolean(b.halted) } : {}),
+        ...(b?.stats ? { stats: b.stats } : {}),
+        ...(b?.gates ? { gates: b.gates } : {}),
+        ...(b?.rules ? { rules: b.rules } : {}),
+      };
       if (hasTelegram || !prev || prev.open !== open || now - prev.ts >= HB_MIN_WRITE_MS) {
-        await env.KV.put("hb", JSON.stringify({ ts: now, open }));
-        kvHbCache.set(env.KV, { ts: now, open });
+        await env.KV.put("hb", JSON.stringify(payload));
+        kvHbCache.set(env.KV, payload);
       }
       return json({ ok: true });
     }
@@ -681,6 +919,106 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     const path = url.pathname;
+
+    // Mini App page (no secrets inside; all data comes from authenticated /api calls).
+    if ((path === "/app" || path === "/") && req.method === "GET") {
+      return new Response(APP_HTML, {
+        headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
+    // Mini App API routes: require Telegram initData authentication + RBAC
+    if (path.startsWith("/api/")) {
+      const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "client";
+      const rl = checkRateLimit(`api:${clientIp}`, { limit: 120, windowMs: 60000 });
+      if (!rl.allowed) {
+        return json({ error: "rate_limit_exceeded", resetMs: rl.resetMs }, 429);
+      }
+
+      const auth = await authenticateTelegram(env, req.headers.get("x-init"), { replayCheck: req.method === "POST" });
+      if (!auth.ok) {
+        return json({ error: auth.error || "unauthorized" }, 401);
+      }
+
+      const role = getRole(env, auth.user.id);
+      if (!role) {
+        return json({ error: "forbidden" }, 403);
+      }
+
+      if (path === "/api/state" && req.method === "GET") {
+        if (!authorizeAction(role, "read_state")) return json({ error: "insufficient_permissions" }, 403);
+        const [q, hb, ctl] = await Promise.all([
+          readKvQ(env),
+          env.KV?.get ? env.KV.get("hb", "json") : null,
+          env.KV?.get ? env.KV.get("ctl", "json") : null,
+        ]);
+        return json({
+          ok: true,
+          halt: Boolean(q.halt),
+          seq: q.seq,
+          rules: { ...(hb?.rules ?? {}), ...(ctl?.rules ?? {}) },
+          hb: hb ?? {},
+          role,
+          user: auth.user,
+        });
+      }
+
+      if (path === "/api/halt" && req.method === "POST") {
+        const haltOn = url.searchParams.get("on") === "1";
+        const action = haltOn ? "halt" : "resume";
+        if (!authorizeAction(role, action)) return json({ error: "insufficient_permissions" }, 403);
+
+        await withKvMutex(env.KV, async () => {
+          const q = await readKvQ(env);
+          q.halt = haltOn;
+          if (env.KV?.put) {
+            await env.KV.put("halt", haltOn ? "1" : "0");
+            await env.KV.put("queue", JSON.stringify(q));
+          }
+        });
+        await recordAudit(env, {
+          actorId: auth.user.id,
+          role,
+          action,
+          target: "engine",
+          result: "success",
+          detail: { halt: haltOn },
+        });
+        await tg(env, haltOn ? `HALT set by ${auth.user.firstName || auth.user.id}: no new entries` : `HALT cleared by ${auth.user.firstName || auth.user.id}`);
+        return json({ ok: true, halt: haltOn });
+      }
+
+      if (path === "/api/rules" && req.method === "POST") {
+        if (!authorizeAction(role, "update_rules")) return json({ error: "insufficient_permissions" }, 403);
+        const body = await req.json().catch(() => ({}));
+        const cleaned = cleanRules(body);
+        let updatedRules = {};
+        await withKvMutex(env.KV, async () => {
+          const ctl = ((await env.KV.get("ctl", "json")) ?? { halt: false, rules: {} });
+          ctl.rules = { ...(ctl.rules ?? {}), ...cleaned };
+          updatedRules = ctl.rules;
+          await env.KV.put("ctl", JSON.stringify(ctl));
+        });
+        await recordAudit(env, {
+          actorId: auth.user.id,
+          role,
+          action: "update_rules",
+          target: "rules",
+          result: "success",
+          detail: cleaned,
+        });
+        await tg(env, `Rules updated by ${auth.user.firstName || auth.user.id}: ${JSON.stringify(cleaned)}`);
+        return json({ ok: true, rules: updatedRules });
+      }
+
+      if (path === "/api/audit" && req.method === "GET") {
+        if (!authorizeAction(role, "read_audit")) return json({ error: "insufficient_permissions" }, 403);
+        const audits = (await env.KV?.get?.("audit", "json")) ?? [];
+        return json({ ok: true, audit: audits });
+      }
+
+      return json({ error: "not found" }, 404);
+    }
 
     // Helius webhook (its own auth header).
     if (path === "/hook" && req.method === "POST") {
@@ -734,9 +1072,12 @@ export default {
 
     if (late && !alerted) {
       const mins = Math.round((Date.now() - hb.ts) / 60000);
+      const openCount = Array.isArray(hb.open)
+        ? hb.open.length
+        : (Number.isFinite(Number(hb.open)) ? Math.floor(Number(hb.open)) : 0);
       await tg(
         env,
-        `Phone silent for ${mins} min. Open paper positions at last heartbeat: ${hb.open}`,
+        `Phone silent for ${mins} min. Open paper positions at last heartbeat: ${openCount}`,
       );
       await env.KV.put("alerted", "1", { expirationTtl: 3600 }).catch(() => {});
     } else if (!late && alerted && typeof env.KV.delete === "function") {

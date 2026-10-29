@@ -25,7 +25,34 @@ export function parseNum(env, key, defaultVal, { min = -Infinity, max = Infinity
   return val;
 }
 
+// Mandatory Paper-Only Safety Invariants (Fail-Closed)
+export function assertPaperSafety(env = process.env) {
+  const parseBoolFlag = (val, defaultVal, flagName, expectedSafeVal) => {
+    if (val === undefined || val === null || String(val).trim() === "") {
+      return defaultVal;
+    }
+    const s = String(val).trim().toLowerCase();
+    let boolVal;
+    if (s === "true" || s === "1" || s === "yes" || s === "on") boolVal = true;
+    else if (s === "false" || s === "0" || s === "no" || s === "off") boolVal = false;
+    else {
+      throw new Error(`CRITICAL SAFETY VIOLATION: Invalid boolean value for safety flag ${flagName}="${val}". Must fail closed.`);
+    }
+    if (boolVal !== expectedSafeVal) {
+      throw new Error(`CRITICAL SAFETY VIOLATION: ${flagName} must be ${expectedSafeVal}, received ${val}. Live trading is strictly forbidden.`);
+    }
+    return boolVal;
+  };
+
+  parseBoolFlag(env.PAPER, true, "PAPER", true);
+  parseBoolFlag(env.DRY_RUN, true, "DRY_RUN", true);
+  parseBoolFlag(env.AUTO_EXECUTE, false, "AUTO_EXECUTE", false);
+  parseBoolFlag(env.LIVE_TRADING_ENABLED, false, "LIVE_TRADING_ENABLED", false);
+}
+
 export function loadConfig(env = process.env, { allowPlaceholder = false } = {}) {
+  assertPaperSafety(env);
+
   const need = (k, fallback = "") => {
     const v = env[k] !== undefined ? String(env[k]).trim() : "";
     if (!v) {
@@ -36,6 +63,10 @@ export function loadConfig(env = process.env, { allowPlaceholder = false } = {})
   };
 
   return {
+    paper: true,
+    dryRun: true,
+    autoExecute: false,
+    liveTradingEnabled: false,
     rpcUrl: need("RPC_URL", "http://127.0.0.1:8899"),
     workerUrl: need("WORKER_URL", "http://127.0.0.1:8787").replace(/\/$/, ""),
     appKey: need("APP_KEY", "test-app-key"),

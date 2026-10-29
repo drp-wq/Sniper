@@ -27,12 +27,13 @@ class MockKV {
   }
 }
 
+let testQuerySeq = 0;
 // Helper to create valid signed Telegram initData using HMAC-SHA256
 async function createTelegramInitData(botToken, user, authDate = Math.floor(Date.now() / 1000)) {
   const enc = new TextEncoder();
   const params = new URLSearchParams();
   params.set("auth_date", String(authDate));
-  params.set("query_id", "AAG_test_123");
+  params.set("query_id", `AAG_test_${++testQuerySeq}`);
   params.set("user", typeof user === "string" ? user : JSON.stringify(user));
 
   const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join("\n");
@@ -289,4 +290,136 @@ test("worker scheduled watchdog: sends alert on stale phone and clears on recove
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("worker /app and /api routes: serves UI, enforces RBAC, and records audit log", async () => {
+  const kv = new MockKV();
+  const env = {
+    KV: kv,
+    TG_TOKEN: "mock-token-123",
+    TG_CHAT: "1001",
+    TG_OPERATORS: "2001",
+    TG_VIEWERS: "3001",
+  };
+
+  // 1. /app serves HTML panel
+  const appRes = await worker.fetch(new Request("https://worker.dev/app"), env);
+  assert.equal(appRes.status, 200);
+  assert.equal(appRes.headers.get("content-type"), "text/html; charset=utf-8");
+
+  // 2. Unauthenticated /api/state returns 401
+  const unauthRes = await worker.fetch(new Request("https://worker.dev/api/state"), env);
+  assert.equal(unauthRes.status, 401);
+
+  // 3. Viewer access to /api/state
+  const viewerInit = await createTelegramInitData(env.TG_TOKEN, { id: 3001, first_name: "Viewer" });
+  const stateRes = await worker.fetch(new Request("https://worker.dev/api/state", {
+    headers: { "x-init": viewerInit },
+  }), env);
+  assert.equal(stateRes.status, 200);
+  const stateData = await stateRes.json();
+  assert.equal(stateData.role, "viewer");
+  assert.equal(stateData.halt, false);
+
+  // 4. Viewer attempts to halt -> 403 (insufficient permissions)
+  const viewerHalt = await worker.fetch(new Request("https://worker.dev/api/halt?on=1", {
+    method: "POST",
+    headers: { "x-init": viewerInit },
+  }), env);
+  assert.equal(viewerHalt.status, 403);
+
+  // 5. Operator halts -> 200 OK
+  const operatorInit = await createTelegramInitData(env.TG_TOKEN, { id: 2001, first_name: "Operator" });
+  const opHalt = await worker.fetch(new Request("https://worker.dev/api/halt?on=1", {
+    method: "POST",
+    headers: { "x-init": operatorInit },
+  }), env);
+  assert.equal(opHalt.status, 200);
+  const opHaltData = await opHalt.json();
+  assert.equal(opHaltData.halt, true);
+
+  // 6. Operator attempts to update rules -> 403 (admin only)
+  const opRulesInit = await createTelegramInitData(env.TG_TOKEN, { id: 2001, first_name: "Operator" });
+  const opRules = await worker.fetch(new Request("https://worker.dev/api/rules", {
+    method: "POST",
+    headers: { "x-init": opRulesInit, "content-type": "application/json" },
+    body: JSON.stringify({ stopLoss: 20 }),
+  }), env);
+  assert.equal(opRules.status, 403);
+
+  // 7. Admin updates rules -> 200 OK
+  const adminInit = await createTelegramInitData(env.TG_TOKEN, { id: 1001, first_name: "Admin" });
+  const adminRules = await worker.fetch(new Request("https://worker.dev/api/rules", {
+    method: "POST",
+    headers: { "x-init": adminInit, "content-type": "application/json" },
+    body: JSON.stringify({ stopLoss: 20, maxHoldMin: 45 }),
+  }), env);
+  assert.equal(adminRules.status, 200);
+  const adminRulesData = await adminRules.json();
+  assert.equal(adminRulesData.rules.stopLoss, 20);
+  assert.equal(adminRulesData.rules.maxHoldMin, 45);
+
+  // 8. Audit log records events
+  const audits = await kv.get("audit", "json");
+  assert.ok(Array.isArray(audits));
+  assert.ok(audits.some((a) => a.action === "halt" && a.role === "operator"));
+});
+
+test("worker watchdog & heartbeat: normalizes open positions, preserves telemetry, and never clears halt", async () => {
+  const kv = new MockKV();
+  const env = {
+    KV: kv,
+    TG_TOKEN: "mock-token",
+    TG_CHAT: "12345",
+    APP_KEY: "test-app-key",
+  };
+
+  // 1. Manually engage HALT
+  await kv.put("halt", "1");
+  await kv.put("queue", JSON.stringify({ seq: 10, items: [], halt: true }));
+
+  // 2. Submit heartbeat with array open positions and telemetry
+  const hbReq = new Request("https://worker.dev/heartbeat", {
+    method: "POST",
+    headers: { "x-key": "test-app-key", "content-type": "application/json" },
+    body: JSON.stringify({
+      open: [{ mint: "TokenA" }, { mint: "TokenB" }],
+      dailyLoss: -12.5,
+      halted: true,
+      stats: { wins: 3 },
+    }),
+  });
+  const hbRes = await worker.fetch(hbReq, env);
+  assert.equal(hbRes.status, 200);
+
+  const storedHb = await kv.get("hb", "json");
+  assert.equal(storedHb.open, 2);
+  assert.equal(storedHb.dailyLoss, -12.5);
+  assert.equal(storedHb.halted, true);
+  assert.equal(storedHb.stats.wins, 3);
+
+  // 3. Trigger watchdog when phone is silent (stale timestamp)
+  storedHb.ts = Date.now() - 20 * 60 * 1000;
+  await kv.put("hb", JSON.stringify(storedHb));
+  await worker.scheduled({}, env);
+
+  // Assert halt remains engaged
+  const haltAfterAlert = await kv.get("halt");
+  assert.equal(haltAfterAlert, "1");
+  const queueAfterAlert = await kv.get("queue", "json");
+  assert.equal(queueAfterAlert.halt, true);
+
+  // 4. Phone recovers (fresh heartbeat) -> watchdog clears alert, but HALT MUST REMAIN ENGAGED
+  const recoverReq = new Request("https://worker.dev/heartbeat", {
+    method: "POST",
+    headers: { "x-key": "test-app-key", "content-type": "application/json" },
+    body: JSON.stringify({ open: 1, dailyLoss: -12.5, halted: true }),
+  });
+  await worker.fetch(recoverReq, env);
+  await worker.scheduled({}, env);
+
+  assert.equal(await kv.get("alerted"), null); // alert cleared
+  assert.equal(await kv.get("halt"), "1"); // HALT still engaged!
+  const queueAfterRecover = await kv.get("queue", "json");
+  assert.equal(queueAfterRecover.halt, true);
 });
