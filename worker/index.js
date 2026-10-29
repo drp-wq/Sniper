@@ -1006,12 +1006,51 @@ export default {
       });
     }
 
-    // Mini App API routes: require Telegram initData authentication + RBAC
+    // Mini App API routes: require Telegram initData authentication + RBAC or master APP_KEY
     if (path.startsWith("/api/")) {
       const clientIp = req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "client";
       const rl = checkRateLimit(`api:${clientIp}`, { limit: 120, windowMs: 60000 });
       if (!rl.allowed) {
         return json({ error: "rate_limit_exceeded", resetMs: rl.resetMs }, 429);
+      }
+
+      const providedKey = req.headers.get("x-key")?.trim() || "";
+      const expectedKey = env?.APP_KEY?.trim() || "";
+      const hasAppKey = Boolean(
+        providedKey.length >= 8 &&
+        expectedKey.length >= 8 &&
+        timingSafeEqualString(providedKey, expectedKey)
+      );
+
+      // Endpoint: Configure Telegram credentials without requiring initData if authenticated via APP_KEY
+      if (path === "/api/telegram-config" && req.method === "POST") {
+        const body = await req.json().catch(() => ({}));
+        let isAuthorized = hasAppKey;
+        if (!isAuthorized && req.headers.get("x-init")) {
+          const auth = await authenticateTelegram(env, req.headers.get("x-init")).catch(() => ({ ok: false }));
+          if (auth.ok && getRole(env, auth.user?.id) === "admin") {
+            isAuthorized = true;
+          }
+        }
+        if (!isAuthorized) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        const tgToken = body?.tgToken ? String(body.tgToken).trim() : "";
+        const tgChat = body?.tgChat ? String(body.tgChat).trim() : "";
+
+        if (tgToken && env.KV) {
+          await env.KV.put("config:tg_token", tgToken);
+        }
+        if (tgChat && env.KV) {
+          await env.KV.put("config:tg_chat", tgChat);
+        }
+
+        const sent = await tg(
+          env,
+          "🎯 Solana Sniper Telegram Relay Activated!\nAlerts are now enabled for all footprints (signals, gates, paper trades, exits, and heartbeats)."
+        );
+        return json({ ok: true, sent: Boolean(sent) });
       }
 
       const auth = await authenticateTelegram(env, req.headers.get("x-init"), { replayCheck: req.method === "POST" });
@@ -1023,6 +1062,7 @@ export default {
       if (!role) {
         return json({ error: "forbidden" }, 403);
       }
+      const user = auth.user;
 
       if (path === "/api/state" && req.method === "GET") {
         if (!authorizeAction(role, "read_state")) return json({ error: "insufficient_permissions" }, 403);
@@ -1038,7 +1078,7 @@ export default {
           rules: { ...(hb?.rules ?? {}), ...(ctl?.rules ?? {}) },
           hb: hb ?? {},
           role,
-          user: auth.user,
+          user,
         });
       }
 
@@ -1056,14 +1096,14 @@ export default {
           }
         });
         await recordAudit(env, {
-          actorId: auth.user.id,
+          actorId: user.id,
           role,
           action,
           target: "engine",
           result: "success",
           detail: { halt: haltOn },
         });
-        await tg(env, haltOn ? `HALT set by ${auth.user.firstName || auth.user.id}: no new entries` : `HALT cleared by ${auth.user.firstName || auth.user.id}`);
+        await tg(env, haltOn ? `HALT set by ${user.firstName || user.id}: no new entries` : `HALT cleared by ${user.firstName || user.id}`);
         return json({ ok: true, halt: haltOn });
       }
 
@@ -1079,14 +1119,14 @@ export default {
           await env.KV.put("ctl", JSON.stringify(ctl));
         });
         await recordAudit(env, {
-          actorId: auth.user.id,
+          actorId: user.id,
           role,
           action: "update_rules",
           target: "rules",
           result: "success",
           detail: cleaned,
         });
-        await tg(env, `Rules updated by ${auth.user.firstName || auth.user.id}: ${JSON.stringify(cleaned)}`);
+        await tg(env, `Rules updated by ${user.firstName || user.id}: ${JSON.stringify(cleaned)}`);
         return json({ ok: true, rules: updatedRules });
       }
 
@@ -1135,22 +1175,6 @@ export default {
     if (path === "/notify" && req.method === "POST") {
       const b = await req.json().catch(() => ({}));
       const sent = await tg(env, b?.text ?? "");
-      return json({ ok: true, sent: Boolean(sent) });
-    }
-
-    if (path === "/api/telegram-config" && req.method === "POST") {
-      const body = await req.json().catch(() => ({}));
-      const tgToken = body?.tgToken ? String(body.tgToken).trim() : "";
-      const tgChat = body?.tgChat ? String(body.tgChat).trim() : "";
-
-      if (tgToken && env.KV) {
-        await env.KV.put("config:tg_token", tgToken);
-      }
-      if (tgChat && env.KV) {
-        await env.KV.put("config:tg_chat", tgChat);
-      }
-
-      const sent = await tg(env, "🎯 Solana Sniper Telegram Relay Activated!\nAlerts are now enabled for all footprints (signals, gates, paper trades, exits, and heartbeats).");
       return json({ ok: true, sent: Boolean(sent) });
     }
 
