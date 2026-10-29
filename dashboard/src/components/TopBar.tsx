@@ -1,239 +1,173 @@
-/**
- * Top App Bar
- * Permanent PAPER MODE ONLY badge, Worker status, Sequence cursor, Heartbeat,
- * Quick Audio Mute, Signal Simulator, and Local/Remote Halt Kill-Switches.
- */
-
-import React from 'react';
-import {
-  ShieldAlert,
-  Radio,
-  Power,
-  Zap,
-  Activity,
-  Smartphone,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  Sparkles,
-  Volume2,
-  VolumeX,
-} from 'lucide-react';
-import { engine } from '../services/engine';
-import { TelegramService } from '../services/telegram';
+import React, { useState } from 'react';
+import { ShieldAlert, Zap, Radio, ChevronDown, Check, Activity, ShieldCheck, Power } from 'lucide-react';
+import { RpcNode } from '../types';
+import { haptics } from '../services/haptics';
 
 interface TopBarProps {
-  isMobilePreview: boolean;
-  onToggleMobilePreview: () => void;
-  onOpenApkModal?: () => void;
+  walletSol: number;
+  activeRpc: RpcNode;
+  allRpcNodes: RpcNode[];
+  onSelectRpc: (node: RpcNode) => void;
+  isEngineActive: boolean;
+  onOpenKillSwitch: () => void;
+  onOpenWalletModal: () => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
-  isMobilePreview,
-  onToggleMobilePreview,
-  onOpenApkModal,
+  walletSol,
+  activeRpc,
+  allRpcNodes,
+  onSelectRpc,
+  isEngineActive,
+  onOpenKillSwitch,
+  onOpenWalletModal
 }) => {
-  const isScannerActive = engine.isScannerActive();
-  const isLocalHalted = engine.isLocalHaltActive();
-  const isRemoteHalted = engine.isRemoteHaltActive();
-  const cursor = engine.getCursor();
-  const workerStatus = engine.workerStatus;
-  const latency = engine.lastWorkerLatencyMs;
-  const lastHeartbeat = engine.lastHeartbeatAt;
-  const config = engine.getConfig();
+  const [showRpcDropdown, setShowRpcDropdown] = useState(false);
 
-  const anyHalt = isLocalHalted || isRemoteHalted;
-
-  const handleToggleLocalHalt = () => {
-    engine.setLocalHalt(!isLocalHalted);
+  const getLatencyBadgeClass = (latency: number) => {
+    if (latency < 100) return 'text-cyan-400 bg-cyan-950/40 border-cyan-500/30';
+    if (latency <= 300) return 'text-amber-400 bg-amber-950/40 border-amber-500/30';
+    return 'text-red-400 bg-red-950/40 border-red-500/30';
   };
 
-  const handleToggleRemoteHalt = async () => {
-    await engine.setRemoteHalt(!isRemoteHalted);
-  };
-
-  const handleToggleScanner = () => {
-    if (isScannerActive) {
-      engine.stop();
-    } else {
-      engine.start();
-    }
-  };
-
-  const handleToggleSound = () => {
-    engine.updateConfig({ soundAlerts: !config.soundAlerts });
-  };
-
-  const handleQuickSimulate = () => {
-    engine.simulateSignal();
+  const getLatencyDotClass = (latency: number) => {
+    if (latency < 100) return 'bg-cyan-400';
+    if (latency <= 300) return 'bg-amber-400';
+    return 'bg-red-400';
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-[#0B0F17]/95 backdrop-blur border-b border-[#1F2937] px-3 py-2.5">
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+    <header className="sticky top-0 z-30 w-full glass-panel border-b border-white/8 backdrop-blur-xl px-3 py-2">
+      <div className="flex items-center justify-between gap-1.5 sm:gap-2 max-w-7xl mx-auto">
         
-        {/* Left: Branding & Mandatory Paper Badge */}
-        <div className="flex items-center gap-2.5 flex-wrap">
-          <div className="flex items-center gap-2">
-            <div className="relative flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
-              <Zap className="w-4 h-4 fill-emerald-400/20" />
-              {isScannerActive && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+        {/* Zone 1: Brand Lockup & Paper Mode Badge */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <div className="relative flex items-center justify-center w-7 h-7 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+              <Zap className="w-4 h-4 text-emerald-400 fill-emerald-400" />
+              {isEngineActive && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
               )}
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-bold text-sm tracking-wide text-white">SOLANA SNIPER</span>
-                <span className="text-[10px] font-mono text-zinc-400">v1.0.4</span>
-              </div>
-              <div className="text-[10px] text-zinc-500 flex items-center gap-1">
-                <span>SignalQueueDO</span>
-                <span>•</span>
-                <span>Shadow Mode</span>
-              </div>
+            <div className="flex flex-col">
+              <span className="text-xs sm:text-sm font-bold tracking-tight text-white font-mono leading-none flex items-center gap-1">
+                SOL<span className="text-emerald-400">RELAY</span>
+              </span>
+              <span className="text-[9px] text-slate-400 tracking-wider font-mono uppercase">
+                Sniper OS
+              </span>
             </div>
           </div>
 
-          {/* MANDATORY SAFETY BOUNDARY: Permanent PAPER MODE ONLY Badge */}
-          <div className="flex items-center gap-1.5 bg-amber-500/10 border border-amber-500/40 px-2.5 py-1 rounded text-amber-300 font-mono text-xs font-bold tracking-wider animate-pulse">
-            <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span>PAPER MODE ONLY</span>
+          {/* Mandatory Paper Mode Only Safety Badge */}
+          <div className="hidden xs:flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-amber-300 font-mono text-[9px] font-bold tracking-wider">
+            <ShieldAlert className="w-3 h-3 text-amber-400" />
+            <span>PAPER MODE</span>
           </div>
+        </div>
 
-          {/* Telegram Mini App indicator */}
-          {TelegramService.isTma() && (
-            <div className="flex items-center gap-1 bg-sky-500/15 border border-sky-500/40 px-2 py-0.5 rounded text-sky-300 font-mono text-[11px] font-semibold">
-              <Smartphone className="w-3 h-3 text-sky-400" />
-              <span>TG MINI APP</span>
-            </div>
-          )}
+        {/* Zone 2: Telemetry Heartbeat & Interactive Latency Gauge */}
+        <div className="relative flex items-center gap-1 sm:gap-2">
+          {/* Latency Trigger Button */}
+          <button
+            onClick={() => {
+              haptics.selection();
+              setShowRpcDropdown(!showRpcDropdown);
+            }}
+            className={`flex items-center gap-1 px-1.5 sm:px-2 py-1 rounded-md text-[10px] sm:text-[11px] font-mono border transition-all ${getLatencyBadgeClass(activeRpc.latencyMs)} active:scale-95`}
+            title="Solana RPC Telemetry & Node Switcher"
+          >
+            <span className={`w-1.5 h-1.5 rounded-full ${getLatencyDotClass(activeRpc.latencyMs)}`} />
+            <span className="tabular-nums font-semibold">{activeRpc.latencyMs}ms</span>
+            <span className="text-slate-400 hidden sm:inline">· {activeRpc.name.split(' ')[0]}</span>
+            <ChevronDown className="w-3 h-3 text-slate-400 ml-0.5" />
+          </button>
 
-          {/* Remote & Local Halt Indicator */}
-          {anyHalt && (
-            <div className="flex items-center gap-1 bg-red-500/20 border border-red-500/50 px-2 py-0.5 rounded text-red-300 font-mono text-xs font-bold">
-              <Power className="w-3 h-3 text-red-400" />
-              <span>{isLocalHalted && isRemoteHalted ? 'ALL HALTS ACTIVE' : isLocalHalted ? 'LOCAL HALTED' : 'REMOTE HALTED'}</span>
+          {/* RPC Selector Dropdown */}
+          {showRpcDropdown && (
+            <div className="absolute top-full mt-2 left-1/2 -translate-x-1/2 w-64 glass-panel-elevated rounded-xl p-2 shadow-2xl z-50 border border-white/10 animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-2 py-1 border-b border-white/5 mb-1.5 flex items-center justify-between">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-slate-400">
+                  Solana Cluster Endpoints
+                </span>
+                <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-mono">
+                  <Activity className="w-3 h-3 animate-pulse" /> Live
+                </span>
+              </div>
+              <div className="space-y-1">
+                {allRpcNodes.map((node) => (
+                  <button
+                    key={node.id}
+                    onClick={() => {
+                      haptics.medium();
+                      onSelectRpc(node);
+                      setShowRpcDropdown(false);
+                    }}
+                    className={`w-full flex items-center justify-between p-2 rounded-lg text-left transition-all ${
+                      activeRpc.id === node.id
+                        ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                        : 'hover:bg-white/5 text-slate-300'
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-semibold flex items-center gap-1.5">
+                        {node.name}
+                        {node.jitoMevSupported && (
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-purple-900/60 text-purple-300 font-mono">
+                            MEV
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {node.location}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 font-mono text-xs">
+                      <span className={node.latencyMs < 100 ? 'text-cyan-400' : node.latencyMs <= 300 ? 'text-amber-400' : 'text-red-400'}>
+                        {node.latencyMs}ms
+                      </span>
+                      {activeRpc.id === node.id && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Center/Right: Worker Status, Heartbeat, Seq & Kill Switches */}
-        <div className="flex items-center gap-2 flex-wrap text-xs font-mono">
-          
-          {/* Worker Connection Status */}
-          <div
-            className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
-              workerStatus === 'connected'
-                ? 'bg-emerald-950/40 border-emerald-800/60 text-emerald-300'
-                : workerStatus === 'error'
-                ? 'bg-red-950/40 border-red-800/60 text-red-300'
-                : 'bg-zinc-900 border-zinc-800 text-zinc-400'
-            }`}
-            title={engine.workerErrorMessage || 'Worker Status'}
-          >
-            <Radio className={`w-3 h-3 ${workerStatus === 'connected' ? 'animate-pulse text-emerald-400' : 'text-zinc-500'}`} />
-            <span>DO Relay</span>
-            {latency > 0 && <span className="text-[10px] opacity-80">{latency}ms</span>}
-          </div>
-
-          {/* Sequence Cursor */}
-          <div className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-300">
-            <span className="text-zinc-500">seq:</span>
-            <span className="font-semibold text-emerald-400">{cursor}</span>
-            {engine.sequenceGapDetected && (
-              <span className="text-red-400 text-[10px]" title="Sequence gap detected! Missing signals">⚠️ GAP</span>
-            )}
-          </div>
-
-          {/* Heartbeat Status */}
-          <div className="hidden sm:flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-400 text-[11px]">
-            <Clock className="w-3 h-3 text-zinc-500" />
-            <span>HB:</span>
-            <span>{lastHeartbeat > 0 ? `${Math.round((Date.now() - lastHeartbeat) / 1000)}s ago` : 'pending'}</span>
-          </div>
-
-          {/* Sound Toggle */}
+        {/* Zone 3: Wallet SOL Pill & Global Kill-Switch */}
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Wallet Balance Pill */}
           <button
-            onClick={handleToggleSound}
-            className={`p-1.5 rounded transition-colors cursor-pointer ${
-              config.soundAlerts
-                ? 'bg-zinc-800 text-emerald-400 border border-zinc-700'
-                : 'bg-zinc-900 text-zinc-600 border border-zinc-800'
-            }`}
-            title={config.soundAlerts ? 'Sound Alerts On' : 'Sound Alerts Muted'}
+            onClick={() => {
+              haptics.selection();
+              onOpenWalletModal();
+            }}
+            className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-lg bg-slate-900/80 hover:bg-slate-800 border border-white/10 text-[11px] sm:text-xs font-mono transition-all active:scale-95"
+            title="Wallet Balance"
           >
-            {config.soundAlerts ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+            <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald-400" />
+            <span className="text-white font-bold tabular-nums">{walletSol.toFixed(2)}</span>
+            <span className="text-emerald-400 text-[9px] sm:text-[10px] font-semibold">SOL</span>
           </button>
 
-          {/* Quick Simulate Signal Button */}
+          {/* Emergency Kill-Switch Button */}
           <button
-            onClick={handleQuickSimulate}
-            className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-emerald-400 transition-colors cursor-pointer"
-            title="Inject a mock signal into the pipeline"
+            onClick={() => {
+              haptics.heavy();
+              onOpenKillSwitch();
+            }}
+            className="group relative flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-red-950/40 hover:bg-red-900/60 border border-red-500/40 text-red-400 hover:text-red-300 transition-all glow-crimson active:scale-90"
+            title="Emergency Global Kill-Switch"
           >
-            <Zap className="w-3 h-3 text-emerald-400" />
-            <span className="hidden sm:inline">Sim</span>
+            <ShieldAlert className="w-3.5 h-3.5 sm:w-4 sm:h-4 transition-transform group-hover:scale-110" />
+            <span className="sr-only">Emergency Kill Switch</span>
           </button>
-
-          {/* KILL-SWITCH TOGGLES */}
-          <div className="flex items-center gap-1 ml-auto">
-            {/* Local Kill Switch */}
-            <button
-              onClick={handleToggleLocalHalt}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold tracking-wide transition-colors cursor-pointer ${
-                isLocalHalted
-                  ? 'bg-red-600 text-white hover:bg-red-500'
-                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
-              }`}
-              title="Toggle client-side emergency halt (stops entering new signals)"
-            >
-              <Power className="w-3 h-3" />
-              <span>{isLocalHalted ? 'LOCAL RESUME' : 'LOCAL HALT'}</span>
-            </button>
-
-            {/* Remote Cloudflare Worker Kill Switch */}
-            <button
-              onClick={handleToggleRemoteHalt}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold tracking-wide transition-colors cursor-pointer ${
-                isRemoteHalted
-                  ? 'bg-red-600 text-white hover:bg-red-500'
-                  : 'bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
-              }`}
-              title="Toggle remote Worker Durable Object halt switch (POST /halt?on=1|0)"
-            >
-              <Activity className="w-3 h-3" />
-              <span>{isRemoteHalted ? 'DO RESUME' : 'DO HALT'}</span>
-            </button>
-
-            {/* Scanner Start/Pause Master */}
-            <button
-              onClick={handleToggleScanner}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
-                isScannerActive
-                  ? 'bg-emerald-500 hover:bg-emerald-400 text-black shadow-lg shadow-emerald-500/20'
-                  : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700'
-              }`}
-            >
-              {isScannerActive ? <Power className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-              <span>{isScannerActive ? 'SCANNING ON' : 'START SCAN'}</span>
-            </button>
-
-            {/* APK Modal button suppressed per Telegram Mini App delivery priority */}
-
-            {/* Mobile Viewport Toggle */}
-            <button
-              onClick={onToggleMobilePreview}
-              className={`p-1.5 rounded transition-colors cursor-pointer ${
-                isMobilePreview
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                  : 'text-zinc-400 hover:text-white bg-zinc-800/80 border border-zinc-700/60'
-              }`}
-              title="Toggle Android Device Frame Preview"
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
         </div>
 
       </div>

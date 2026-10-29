@@ -7,6 +7,7 @@
 import type {
   AppConfig,
   ClosedTrade,
+  DexQuote,
   EngineStats,
   EquityPoint,
   ExitReason,
@@ -860,6 +861,60 @@ export class SniperEngine {
     if (pos) {
       this.closePosition(pos, 'manual_close');
     }
+  }
+
+  /**
+   * Direct Paper Position Opener (Quick Snipe from UI)
+   */
+  public openPaperPosition(mint: string, symbol: string, quoteInput?: Partial<DexQuote>): PaperPosition {
+    const rawPrice = quoteInput?.priceUsd || 0.0001;
+    const entryPrice = rawPrice * (1 + this.config.entrySlip);
+    const stakeUsd = this.config.stakeUsdDefault;
+    const shares = stakeUsd / entryPrice;
+    const now = Date.now();
+
+    const position: PaperPosition = {
+      id: `pos_${Date.now()}_${mint.slice(0, 6)}`,
+      mint,
+      symbol: quoteInput?.symbol || symbol,
+      name: quoteInput?.name || symbol,
+      pairAddress: quoteInput?.pairAddress || 'RayPool...',
+      openedAt: now,
+      entryPriceRaw: rawPrice,
+      entryPrice,
+      entryLiqUsd: quoteInput?.liqUsd || 50000,
+      stakeUsd,
+      shares,
+      currentQuotePrice: rawPrice,
+      currentLiqUsd: quoteInput?.liqUsd || 50000,
+      executablePrice: rawPrice * (1 - this.config.exitSlip),
+      unrealizedPnlPct: 0,
+      unrealizedPnlUsd: 0,
+      peakExecutablePrice: rawPrice * (1 - this.config.exitSlip),
+      peakPnlPct: 0,
+      tookHalf: false,
+      bankedUsd: 0,
+      trailingArmed: false,
+      missedQuoteTicks: 0,
+      isUnresolved: false,
+      simulated: true,
+      lastHighAt: now,
+      lastTickAt: now,
+      priceHistory: [rawPrice],
+      smartProfitLockEnabled: true,
+      smartProfitLockMode: 'BREAKEVEN_SHIELD',
+      smartProfitFloorPercent: 0,
+      smartProfitLockStage: 0,
+    };
+
+    this.openPositions.unshift(position);
+    StorageService.saveOpenPositions(this.openPositions);
+    if (this.config.soundAlerts) {
+      sounds.playBuy();
+    }
+    this.addToast('buy', `SNIPED: $${position.symbol}`, `Allocated $${stakeUsd} paper capital @ $${rawPrice.toFixed(6)}`);
+    this.notify();
+    return position;
   }
 
   /**
