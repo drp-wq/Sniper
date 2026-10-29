@@ -120,13 +120,12 @@ test("evaluate: trailing stop arms at +50% and exits on 20% pullback from peak",
 });
 
 test("evaluate: time-stop triggers on flat price action with calibrated bandDown", () => {
-  // Bought at screen price 100.
-  // entry = 100 * (1 + 0.05) = 105.
-  // Screen price remains completely flat at 100.
-  // px = 100 * (1 - 0.08) = 92.
-  // pct = (92 / 105 - 1) * 100 = -12.38%.
-  // With bandDown: 15, pct is inside [-15%, +15%].
-  const qFlat = { price: 100, liqUsd: 50000, pair: "pair1" };
+  // Bought with 5% entry slip -> entry = 105.
+  // Screen price is flat at 105.
+  // Executable price with 8% exit slip: px = 105 * (1 - 0.08) = 96.6.
+  // PnL pct = (96.6 / 105 - 1) * 100 = -8.0%.
+  // Safely inside configured [-bandDown%, +bandUp%] (default [-10%, +15%]).
+  const qFlat = { price: 105, liqUsd: 50000, pair: "pair1" };
 
   const p = {
     mint: "MintTestTimeStopFlat",
@@ -141,13 +140,25 @@ test("evaluate: time-stop triggers on flat price action with calibrated bandDown
     misses: 0,
   };
 
+  // Verify the test quote produces an executable price strictly inside configured band
+  const px = qFlat.price * (1 - cfg.exitSlip);
+  const pct = (px / p.entry - 1) * 100;
+  assert.ok(
+    pct >= -cfg.rules.bandDown && pct <= cfg.rules.bandUp,
+    "executable price must be inside configured time-stop band",
+  );
+
   const t0 = 1000000 + 1000;
   const res0 = evaluate(p, qFlat, t0);
   assert.equal(res0, null);
-  assert.equal(p.sidewaysSince, t0);
+  assert.equal(p.sidewaysSince, t0, "sidewaysSince must be initialized on first in-band observation");
 
-  // Still flat 180s later
-  const resEnd = evaluate(p, qFlat, t0 + 180000);
+  // Flat before time-stop threshold (179s later)
+  const resBefore = evaluate(p, qFlat, t0 + (cfg.rules.timeStopSec - 1) * 1000);
+  assert.equal(resBefore, null);
+
+  // Still flat at exactly timeStopSec (180s later)
+  const resEnd = evaluate(p, qFlat, t0 + cfg.rules.timeStopSec * 1000);
   assert.ok(resEnd);
   assert.equal(resEnd.exit, "time_stop");
 });
