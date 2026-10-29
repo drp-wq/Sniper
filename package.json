@@ -8,7 +8,12 @@
   "scripts": {
     "start": "node src/main.js",
     "report": "node src/report.js",
+<<<<<<< HEAD
     "test": "node --test test/*.test.js",
     "sim": "node scripts/simulate.js"
+=======
+    "test": "node --test",
+    "test:telegram": "node scripts/verify-telegram.js"
+>>>>>>> 48de9de (wip)
   }
 }
