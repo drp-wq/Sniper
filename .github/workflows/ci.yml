@@ -1,0 +1,40 @@
+name: CI (Sniper Telegram Mini App & Paper Bot)
+
+on:
+  push:
+    branches: [ main, master, audit-fix-sniper-integration ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    name: Unit Tests & Mini App Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: Run Unit & Security Test Suite
+        run: npm test
+
+      - name: Install Dashboard Dependencies
+        run: npm ci --prefix dashboard --legacy-peer-deps
+
+      - name: Type-Check Dashboard
+        run: npm --prefix dashboard run lint
+
+      - name: Build Telegram Mini App Assets
+        run: npm run build:dashboard
+
+      - name: Verify Committed Bundle Matches Source
+        run: git diff --exit-code -- app/assets
