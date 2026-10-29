@@ -65,14 +65,28 @@ export const DexScreenerService = {
         }
       }
       if (!data) {
-        const res = await fetch(url, {
-          method: 'GET',
-          headers: { 'Accept': 'application/json' },
-        });
-        if (!res.ok) {
-          return null;
+        try {
+          const res = await fetch(url, {
+            method: 'GET',
+            headers: { 'Accept': 'application/json' },
+          });
+          if (res.ok) {
+            data = await res.json();
+          }
+        } catch {
+          // Direct fetch failed (e.g. CORS / network in Telegram webview), try worker proxy
+          try {
+            const proxyRes = await fetch(`/api/proxy?url=${encodeURIComponent(url)}`, {
+              method: 'GET',
+              headers: { 'Accept': 'application/json' },
+            });
+            if (proxyRes.ok) {
+              data = await proxyRes.json();
+            }
+          } catch {
+            // ignore
+          }
         }
-        data = await res.json();
       }
       if (!data || !data.pairs || data.pairs.length === 0) {
         return null;

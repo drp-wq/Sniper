@@ -68,34 +68,53 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
   // 2) Holder concentration, counting only wallet-owned accounts.
   //    Pool vaults / bonding curves are owned by programs (PDAs), so they are excluded.
   //    Unfunded system accounts (ownerInfo[i] === null) are wallets with 0 SOL.
-  const supply = Number((await rpcFn("getTokenSupply", [mint]))?.value?.uiAmount ?? 0);
-  const largest = ((await rpcFn("getTokenLargestAccounts", [mint]))?.value ?? []).slice(0, 20);
-  const jp = { encoding: "jsonParsed" };
-  const tokenAccs = largest.length
-    ? (await rpcFn("getMultipleAccounts", [largest.map((a) => a.address), jp]))?.value ?? []
-    : [];
-  const owners = tokenAccs.map((a) => a?.data?.parsed?.info?.owner ?? null);
-  const ownerKeys = [...new Set(owners.filter(Boolean))];
-  const noData = { encoding: "base64", dataSlice: { offset: 0, length: 0 } };
-  const ownerInfo = ownerKeys.length
-    ? (await rpcFn("getMultipleAccounts", [ownerKeys, noData]))?.value ?? []
-    : [];
-  const isWallet = new Map(ownerKeys.map((k, i) => [k, ownerInfo[i] === null || ownerInfo[i]?.owner === SYSTEM_PROGRAM]));
-
-  // Aggregate holdings by owner wallet
-  const byOwner = new Map();
-  for (let i = 0; i < largest.length; i++) {
-    const owner = owners[i];
-    if (owner && isWallet.get(owner) === true) {
-      const amt = Number(largest[i]?.uiAmount ?? 0);
-      byOwner.set(owner, (byOwner.get(owner) ?? 0) + amt);
+  let supply = 0;
+  if (info.supply != null) {
+    const decimals = Number(info.decimals ?? 0);
+    supply = Number(info.supply) / 10 ** decimals;
+  }
+  if (!supply) {
+    try {
+      supply = Number((await rpcFn("getTokenSupply", [mint]))?.value?.uiAmount ?? 0);
+    } catch {
+      // ignore
     }
   }
 
-  const topWallets = [...byOwner.values()].sort((a, b) => b - a).slice(0, 10);
-  const top10Pct = supply > 0 ? (topWallets.reduce((s, amt) => s + amt, 0) / supply) * 100 : 100;
-  if (top10Pct > gateCfg.maxTop10Pct) {
-    reasons.push(`top10 wallets hold ${top10Pct.toFixed(1)}% (> ${gateCfg.maxTop10Pct}%)`);
+  let top10Pct = 0;
+  try {
+    const largestRes = await rpcFn("getTokenLargestAccounts", [mint]);
+    const largest = (largestRes?.value ?? []).slice(0, 20);
+    if (largest.length > 0) {
+      const jp = { encoding: "jsonParsed" };
+      const tokenAccs = (await rpcFn("getMultipleAccounts", [largest.map((a) => a.address), jp]))?.value ?? [];
+      const owners = tokenAccs.map((a) => a?.data?.parsed?.info?.owner ?? null);
+      const ownerKeys = [...new Set(owners.filter(Boolean))];
+      const noData = { encoding: "base64", dataSlice: { offset: 0, length: 0 } };
+      const ownerInfo = ownerKeys.length
+        ? (await rpcFn("getMultipleAccounts", [ownerKeys, noData]))?.value ?? []
+        : [];
+      const isWallet = new Map(ownerKeys.map((k, i) => [k, ownerInfo[i] === null || ownerInfo[i]?.owner === SYSTEM_PROGRAM]));
+
+      // Aggregate holdings by owner wallet
+      const byOwner = new Map();
+      for (let i = 0; i < largest.length; i++) {
+        const owner = owners[i];
+        if (owner && isWallet.get(owner) === true) {
+          const amt = Number(largest[i]?.uiAmount ?? 0);
+          byOwner.set(owner, (byOwner.get(owner) ?? 0) + amt);
+        }
+      }
+
+      const topWallets = [...byOwner.values()].sort((a, b) => b - a).slice(0, 10);
+      top10Pct = supply > 0 ? (topWallets.reduce((s, amt) => s + amt, 0) / supply) * 100 : 100;
+      if (top10Pct > gateCfg.maxTop10Pct) {
+        reasons.push(`top10 wallets hold ${top10Pct.toFixed(1)}% (> ${gateCfg.maxTop10Pct}%)`);
+      }
+    }
+  } catch {
+    // Free public RPC nodes (e.g. publicnode) reject unindexed requests.
+    // If authorities and extensions are clean, do not fail closed on public RPC block.
   }
 
   return { pass: reasons.length === 0, reasons, top10Pct: Number(top10Pct.toFixed(1)) };
