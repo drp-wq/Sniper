@@ -22,7 +22,7 @@ export function getBaseUrl(config?: AppConfig): string {
 export function getAppKey(config?: AppConfig): string {
   const custom = config?.appKey?.trim();
   if (custom) return custom;
-  return '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618';
+  return '';
 }
 
 interface FetchResult<T> {

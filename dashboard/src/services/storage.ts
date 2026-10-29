@@ -17,7 +17,7 @@ const STORAGE_KEYS = {
 
 export const DEFAULT_CONFIG: AppConfig = {
   workerUrl: typeof window !== 'undefined' ? window.location.origin : 'https://sniper-relay.pjdebnath01.workers.dev',
-  appKey: '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+  appKey: '',
   rpcUrl: 'https://solana-rpc.publicnode.com',
   pollIntervalMs: 3000,
   priceIntervalMs: 5000,
@@ -84,7 +84,7 @@ export const StorageService = {
         config.workerUrl = autoWorker;
       }
       if (!config.appKey) {
-        config.appKey = '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618';
+        config.appKey = '';
       }
       if (
         !config.rpcUrl ||

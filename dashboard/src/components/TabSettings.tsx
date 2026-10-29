@@ -52,7 +52,7 @@ export const TabSettings: React.FC = () => {
     return {
       ...currentConfig,
       workerUrl: currentConfig.workerUrl || autoWorker,
-      appKey: currentConfig.appKey || '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+      appKey: currentConfig.appKey || '',
       rpcUrl:
         !currentConfig.rpcUrl ||
         currentConfig.rpcUrl.includes('api.mainnet-beta.solana.com') ||
@@ -96,7 +96,7 @@ export const TabSettings: React.FC = () => {
         (typeof window !== 'undefined' && window.location.origin.startsWith('http')
           ? window.location.origin
           : 'https://sniper-relay.pjdebnath01.workers.dev'),
-      appKey: form.appKey || '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+      appKey: form.appKey || '',
       rpcUrl:
         !form.rpcUrl ||
         form.rpcUrl.includes('api.mainnet-beta.solana.com') ||
