@@ -29,6 +29,70 @@ export function cleanRules(input) {
   return out;
 }
 
+export function isAllowedProxyDestination(targetUrl, env) {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol !== "https:") {
+      return { allowed: false, reason: "HTTPS protocol required" };
+    }
+    const host = parsed.hostname.toLowerCase();
+
+    // Disallow IP literals and localhost/private addresses
+    if (
+      host === "localhost" ||
+      /^(\d{1,3}\.){3}\d{1,3}$/.test(host) ||
+      host.includes(":") ||
+      host.endsWith(".local") ||
+      host.endsWith(".internal")
+    ) {
+      return { allowed: false, reason: "IP literals and local hosts are forbidden" };
+    }
+
+    // Approved domain allowlist for DexScreener, Solana Public RPC, Raydium, Pump.fun, and verified RPC providers
+    const isDexScreener = host === "api.dexscreener.com";
+    const isSolanaRpc = host === "api.mainnet-beta.solana.com" || host === "api.devnet.solana.com" || host === "api.testnet.solana.com";
+    const isRaydium = host === "api-v3.raydium.io";
+    const isPumpFun = host === "frontend-api.pump.fun";
+    const isHelius = host === "mainnet.helius-rpc.com" || host.endsWith(".helius-rpc.com") || host.endsWith(".helius.xyz");
+    const isQuickNode = host.endsWith(".quiknode.pro");
+    const isRpcPool = host.endsWith(".rpcpool.com");
+    const isAnkr = host.endsWith(".ankr.com");
+
+    let isEnvRpc = false;
+    if (env?.RPC_URL) {
+      try {
+        isEnvRpc = host === new URL(env.RPC_URL).hostname.toLowerCase();
+      } catch {}
+    }
+
+    let isEnvWorker = false;
+    if (env?.WORKER_URL) {
+      try {
+        isEnvWorker = host === new URL(env.WORKER_URL).hostname.toLowerCase();
+      } catch {}
+    }
+
+    if (
+      isDexScreener ||
+      isSolanaRpc ||
+      isRaydium ||
+      isPumpFun ||
+      isHelius ||
+      isQuickNode ||
+      isRpcPool ||
+      isAnkr ||
+      isEnvRpc ||
+      isEnvWorker
+    ) {
+      return { allowed: true, host };
+    }
+
+    return { allowed: false, reason: `Destination host not in allowlist: ${host}` };
+  } catch (err) {
+    return { allowed: false, reason: "Invalid target URL format" };
+  }
+}
+
 export async function timingSafeEqualString(provided, expected) {
   if (typeof provided !== "string" || typeof expected !== "string" || !provided || !expected) {
     return false;
@@ -946,33 +1010,6 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // Browser CORS proxy for Solana RPC & external endpoints
-    if (path === "/api/proxy") {
-      const targetUrl = req.headers.get("x-target-url") || url.searchParams.get("url");
-      if (!targetUrl) return json({ error: "missing_target" }, 400);
-      try {
-        const body = (req.method === "POST" || req.method === "PUT") ? await req.text() : undefined;
-        const targetRes = await fetch(targetUrl, {
-          method: req.method,
-          headers: {
-            "content-type": "application/json",
-            ...(req.headers.get("x-key") ? { "x-key": req.headers.get("x-key") } : {}),
-          },
-          body,
-        });
-        const targetBody = await targetRes.text();
-        return new Response(targetBody, {
-          status: targetRes.status,
-          headers: {
-            "content-type": targetRes.headers.get("content-type") || "application/json",
-            "access-control-allow-origin": "*",
-          },
-        });
-      } catch (e) {
-        return json({ error: "proxy_failed", msg: String(e) }, 502);
-      }
-    }
-
     // Static Assets for Telegram Mini App / Web Terminal (if configured via wrangler [assets])
     if (env?.ASSETS) {
       if (
@@ -1019,8 +1056,67 @@ export default {
       const hasAppKey = Boolean(
         providedKey.length >= 8 &&
         expectedKey.length >= 8 &&
-        timingSafeEqualString(providedKey, expectedKey)
+        await timingSafeEqualString(providedKey, expectedKey)
       );
+
+      // Hardened Proxy Endpoint: Restricted strictly to approved origins with credential stripping
+      if (path === "/api/proxy") {
+        if (req.method !== "GET" && req.method !== "POST") {
+          return json({ error: "method_not_allowed" }, 405);
+        }
+
+        let isAuthorized = hasAppKey;
+        if (!isAuthorized && req.headers.get("x-init")) {
+          const auth = await authenticateTelegram(env, req.headers.get("x-init")).catch(() => ({ ok: false }));
+          if (auth.ok && getRole(env, auth.user?.id)) {
+            isAuthorized = true;
+          }
+        }
+        if (!isAuthorized) {
+          return json({ error: "unauthorized" }, 401);
+        }
+
+        const targetUrl = req.headers.get("x-target-url") || url.searchParams.get("url");
+        if (!targetUrl) return json({ error: "missing_target" }, 400);
+
+        const check = isAllowedProxyDestination(targetUrl, env);
+        if (!check.allowed) {
+          return json({ error: "forbidden_destination", reason: check.reason }, 403);
+        }
+
+        try {
+          let body;
+          if (req.method === "POST") {
+            const rawBody = await req.text();
+            if (rawBody.length > 65536) {
+              return json({ error: "body_too_large" }, 413);
+            }
+            body = rawBody;
+          }
+
+          // Strip internal secrets from outbound proxy request
+          const targetRes = await fetch(targetUrl, {
+            method: req.method,
+            headers: {
+              "content-type": "application/json",
+              "accept": "application/json",
+            },
+            body,
+            redirect: "error",
+          });
+
+          const targetBody = await targetRes.text();
+          return new Response(targetBody, {
+            status: targetRes.status,
+            headers: {
+              "content-type": targetRes.headers.get("content-type") || "application/json",
+              "access-control-allow-origin": "*",
+            },
+          });
+        } catch (e) {
+          return json({ error: "proxy_failed", msg: String(e?.message || e) }, 502);
+        }
+      }
 
       // Endpoint: Configure Telegram credentials without requiring initData if authenticated via APP_KEY
       if (path === "/api/telegram-config" && req.method === "POST") {

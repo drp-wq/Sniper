@@ -423,3 +423,79 @@ test("worker watchdog & heartbeat: normalizes open positions, preserves telemetr
   const queueAfterRecover = await kv.get("queue", "json");
   assert.equal(queueAfterRecover.halt, true);
 });
+
+test("worker /api/proxy: enforces authentication, rejects SSRF and unapproved hosts, strips secrets", async () => {
+  const kv = new MockKV();
+  const env = {
+    KV: kv,
+    APP_KEY: "supersecret-app-key-12345",
+    TG_TOKEN: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+    TG_CHAT: "987654321",
+  };
+
+  const adminInit = await createTelegramInitData(env.TG_TOKEN, { id: 987654321, first_name: "Admin" });
+
+  // 1. Unauthenticated request -> 401
+  const unauthRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=https://api.dexscreener.com/test"), env);
+  assert.equal(unauthRes.status, 401);
+
+  // 2. Disallowed method (PUT) -> 405
+  const putRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=https://api.dexscreener.com/test", {
+    method: "PUT",
+    headers: { "x-key": "supersecret-app-key-12345" },
+  }), env);
+  assert.equal(putRes.status, 405);
+
+  // 3. Missing target -> 400
+  const missingRes = await worker.fetch(new Request("https://worker.dev/api/proxy", {
+    headers: { "x-key": "supersecret-app-key-12345" },
+  }), env);
+  assert.equal(missingRes.status, 400);
+
+  // 4. SSRF against Cloud Metadata (169.254.169.254) -> 403
+  const metadataRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=http://169.254.169.254/latest/meta-data", {
+    headers: { "x-key": "supersecret-app-key-12345" },
+  }), env);
+  assert.equal(metadataRes.status, 403);
+
+  // 5. SSRF against Loopback (127.0.0.1 / localhost) -> 403
+  const loopbackRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=http://127.0.0.1:8080/admin", {
+    headers: { "x-init": adminInit },
+  }), env);
+  assert.equal(loopbackRes.status, 403);
+
+  // 6. Arbitrary attacker host -> 403
+  const evilRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=https://attacker.com/steal-keys", {
+    headers: { "x-key": "supersecret-app-key-12345" },
+  }), env);
+  assert.equal(evilRes.status, 403);
+
+  // 7. Approved destination (DexScreener or Solana RPC) with mocked fetch
+  const originalFetch = globalThis.fetch;
+  let interceptedRequest = null;
+  globalThis.fetch = async (input, init) => {
+    interceptedRequest = { input, init };
+    return new Response(JSON.stringify({ pairs: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    const validRes = await worker.fetch(new Request("https://worker.dev/api/proxy?url=https://api.dexscreener.com/latest/dex/tokens/So11111111111111111111111111111111111111112", {
+      headers: {
+        "x-key": "supersecret-app-key-12345",
+        "x-init": adminInit,
+      },
+    }), env);
+
+    assert.equal(validRes.status, 200);
+    assert.ok(interceptedRequest);
+    // Crucial security check: internal secrets (x-key, x-init) MUST NOT be forwarded!
+    assert.equal(interceptedRequest.init.headers["x-key"], undefined);
+    assert.equal(interceptedRequest.init.headers["x-init"], undefined);
+    assert.equal(interceptedRequest.init.redirect, "error");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
