@@ -18,7 +18,6 @@ No private keys, no wallet signing, no real transactions.
   - Missing quote timeout (`12` ticks)
 - **Logging & Telemetry**: JSON lines recorded to `logs/paper.jsonl`, summarized via `src/stats.js`.
 
-<<<<<<< HEAD
 ## Getting Started
 
 ### Local Tests (Zero Dependencies)
@@ -55,44 +54,3 @@ npm run sim
 - **Telegram Mini App**: Configure Menu Button in `@BotFather` to `https://<YOUR_WORKER_URL>/app`.
 - **Remote Kill Switch**: Click Halt in the Mini App, or call `curl -X POST "https://<YOUR_WORKER_URL>/halt?on=1" -H "x-key: $APP_KEY"`.
 - **Local Kill Switch**: `touch HALT` inside the project root on the phone.
-=======
-Run (Termux): `cp .env.example .env && nano .env && ./run.sh`
-Test suite: `npm test`
-Report: `npm run report` (or `node src/report.js`)
-Telegram test: `npm run test:telegram` (or `node scripts/verify-telegram.js`)
-Halt new entries: `touch HALT` (or POST /halt?on=1 on the Worker)
-Setup guide: see `docs/sniper-bot-paper-only-hardening-and-android-setup-guide.pdf`.
-
-## Telegram Setup (Alerts & Heartbeat Watchdog)
-
-The bot sends real-time Telegram notifications for:
-- Paper Buy entries (with entry price and liquidity)
-- Paper Exit fills (reason, PnL %, and hold duration)
-- Trailing stop arming & take-profit milestones
-- Unresolved position timeouts
-- Worker kill switch triggers (`HALT set` / `HALT cleared`)
-- Worker dead-man watchdog alerts (if phone is silent >12 min)
-
-### 1. Create Bot & Obtain Chat ID
-1. On Telegram, message **@BotFather** -> send `/newbot` -> copy the HTTP API token (`TG_TOKEN`).
-2. Open your new bot and click **START** (or send `/start`).
-3. Message **@userinfobot** to get your numeric ID (`TG_CHAT`).
-
-### 2. Configure Credentials
-- **On Phone (.env)**:
-  ```bash
-  echo "TG_TOKEN=your_bot_token" >> .env
-  echo "TG_CHAT=your_chat_id" >> .env
-  ```
-- **On Cloudflare Worker (optional, for watchdog alerts & relay)**:
-  ```bash
-  npx wrangler secret put TG_TOKEN
-  npx wrangler secret put TG_CHAT
-  ```
-
-### 3. Verify Telegram Setup
-Run the verification utility:
-```bash
-npm run test:telegram
-```
->>>>>>> 48de9de (wip)

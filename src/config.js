@@ -1,49 +1,40 @@
 import { readFileSync, existsSync } from "node:fs";
 
 // Minimal .env loader (no dependencies).
-if (existsSync(".env")) {
-  for (const line of readFileSync(".env", "utf8").split("\n")) {
+export function parseEnvText(text, targetEnv = {}) {
+  for (const line of String(text).split("\n")) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    if (m && !(m[1] in targetEnv)) {
+      targetEnv[m[1]] = m[2].replace(/^["']|["']$/g, "");
+    }
   }
+  return targetEnv;
 }
 
-const need = (k) => {
-  const v = process.env[k];
-  if (!v) throw new Error(`Missing env var ${k} (see .env.example)`);
-  return v;
-};
-const num = (k, d) => (process.env[k] ? Number(process.env[k]) : d);
+if (existsSync(".env")) {
+  parseEnvText(readFileSync(".env", "utf8"), process.env);
+}
 
-<<<<<<< HEAD
-export const cfg = {
-  rpcUrl: need("RPC_URL"),
-  workerUrl: need("WORKER_URL").replace(/\/$/, ""),
-  appKey: need("APP_KEY"),
-  pollMs: num("POLL_MS", 3000),
-  priceMs: num("PRICE_MS", 5000),
-  heartbeatMs: 3 * 60 * 1000,
-  maxOpen: num("MAX_OPEN", 5),
-  minLiqUsd: num("MIN_LIQ_USD", 15000),
-  // Pessimistic paper fills: you will not get the screen price.
-  entrySlip: num("ENTRY_SLIP", 0.05),
-  exitSlip: num("EXIT_SLIP", 0.08),
-  gate: { maxTop10Pct: num("MAX_TOP10_PCT", 35) },
-  // Exit rules (percent unless noted). Tune these from the iPad.
-  rules: {
-    stopLoss: 25,      // exit at -25% from entry
-    bandDown: 15,      // time-stop band: -15% (covers slippage) ...
-    bandUp: 15,        // ... to +15% of entry
-    timeStopSec: 180,  // exit if sideways in band this long with no new high
-    maxHoldMin: 30,    // exit remainder after 30 min
-    takeProfit: 100,   // sell half at +100%
-    trailArm: 50,      // arm trailing stop at +50%
-    trail: 20,         // exit on 20% drawdown from peak once armed
-    liqDrop: 30,       // exit if liquidity falls 30% from entry
-    noQuoteTicks: 12,  // consecutive missing quotes before counting a total loss
-  },
-};
-=======
+export function parseNum(env, key, defaultVal, { min = -Infinity, max = Infinity } = {}) {
+  const raw = env[key];
+  if (raw === undefined || raw === null || String(raw).trim() === "") return defaultVal;
+  const val = Number(raw);
+  if (!Number.isFinite(val) || val < min || val > max) {
+    throw new Error(`Invalid numeric env var ${key} (expected finite number in [${min}, ${max}])`);
+  }
+  return val;
+}
+
+export function loadConfig(env = process.env, { allowPlaceholder = false } = {}) {
+  const need = (k, fallback = "") => {
+    const v = env[k] !== undefined ? String(env[k]).trim() : "";
+    if (!v) {
+      if (allowPlaceholder) return fallback;
+      throw new Error(`Missing env var ${k} (see .env.example)`);
+    }
+    return v;
+  };
+
   return {
     rpcUrl: need("RPC_URL", "http://127.0.0.1:8899"),
     workerUrl: need("WORKER_URL", "http://127.0.0.1:8787").replace(/\/$/, ""),
@@ -94,4 +85,3 @@ const isTestEnv =
   process.execArgv.some((arg) => arg.startsWith("--test")) ||
   isCliHelper;
 export const cfg = loadConfig(process.env, { allowPlaceholder: isTestEnv });
->>>>>>> 48de9de (wip)
