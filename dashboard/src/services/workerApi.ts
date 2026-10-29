@@ -8,6 +8,23 @@
 import type { AppConfig, SignalsResponse, WorkerExportKv } from '../types/index.ts';
 import { TelegramService } from './telegram.ts';
 
+export function getBaseUrl(config?: AppConfig): string {
+  const custom = config?.workerUrl?.trim();
+  if (custom && custom.startsWith('http')) {
+    return custom.replace(/\/+$/, '');
+  }
+  if (typeof window !== 'undefined' && window.location.origin && window.location.origin.startsWith('http')) {
+    return window.location.origin.replace(/\/+$/, '');
+  }
+  return 'https://sniper-relay.pjdebnath01.workers.dev';
+}
+
+export function getAppKey(config?: AppConfig): string {
+  const custom = config?.appKey?.trim();
+  if (custom) return custom;
+  return '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618';
+}
+
 interface FetchResult<T> {
   data: T | null;
   error?: string;
@@ -20,11 +37,16 @@ async function requestWithFallback<T>(
   config: AppConfig
 ): Promise<FetchResult<T>> {
   const start = performance.now();
+  const absoluteUrl = url.startsWith('http')
+    ? url
+    : `${getBaseUrl(config)}${url.startsWith('/') ? '' : '/'}${url}`;
+
+  const appKey = getAppKey(config);
   const headers: Record<string, string> = {
     'content-type': 'application/json',
   };
-  if (config.appKey) {
-    headers['x-key'] = config.appKey;
+  if (appKey) {
+    headers['x-key'] = appKey;
   }
   const initData = TelegramService.getWebApp()?.initData;
   if (initData) {
@@ -41,7 +63,7 @@ async function requestWithFallback<T>(
       };
       const bodyStr = options.body ? String(options.body) : '';
       const rawRes = bridge.httpRequest(
-        url,
+        absoluteUrl,
         options.method || 'GET',
         JSON.stringify(mergedHeaders),
         bodyStr
@@ -68,7 +90,7 @@ async function requestWithFallback<T>(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 6000);
 
-    const directRes = await fetch(url, {
+    const directRes = await fetch(absoluteUrl, {
       ...options,
       headers: {
         ...headers,
@@ -92,14 +114,14 @@ async function requestWithFallback<T>(
     const data = await directRes.json();
     return { data, latencyMs };
   } catch (err: any) {
-    // If browser CORS error or fetch failed, fallback to local Express proxy
+    // If browser CORS error or fetch failed, fallback to Worker /api/proxy
     try {
       const proxyHeaders: Record<string, string> = {
         'content-type': 'application/json',
-        'x-target-url': url,
+        'x-target-url': absoluteUrl,
       };
-      if (config.appKey) {
-        proxyHeaders['x-key'] = config.appKey;
+      if (appKey) {
+        proxyHeaders['x-key'] = appKey;
       }
 
       const proxyRes = await fetch('/api/proxy', {
@@ -138,7 +160,7 @@ export const WorkerApi = {
    * GET {WORKER_URL}/signals?since={cursor}
    */
   async getSignals(config: AppConfig, since: number): Promise<FetchResult<SignalsResponse>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/signals?since=${since}`;
     return requestWithFallback<SignalsResponse>(url, { method: 'GET' }, config);
   },
@@ -147,7 +169,7 @@ export const WorkerApi = {
    * GET {WORKER_URL}/export-kv
    */
   async exportKv(config: AppConfig): Promise<FetchResult<WorkerExportKv>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/export-kv`;
     return requestWithFallback<WorkerExportKv>(url, { method: 'GET' }, config);
   },
@@ -156,7 +178,7 @@ export const WorkerApi = {
    * POST {WORKER_URL}/api/halt?on={1|0} (or /halt?on={1|0})
    */
   async toggleHalt(config: AppConfig, haltOn: boolean): Promise<FetchResult<{ halt: boolean }>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const initData = TelegramService.getWebApp()?.initData;
     const url = initData ? `${base}/api/halt?on=${haltOn ? 1 : 0}` : `${base}/halt?on=${haltOn ? 1 : 0}`;
     return requestWithFallback<{ halt: boolean }>(url, { method: 'POST' }, config);
@@ -166,7 +188,7 @@ export const WorkerApi = {
    * GET {WORKER_URL}/api/state
    */
   async getState(config: AppConfig): Promise<FetchResult<any>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/api/state`;
     return requestWithFallback<any>(url, { method: 'GET' }, config);
   },
@@ -175,7 +197,7 @@ export const WorkerApi = {
    * POST {WORKER_URL}/api/rules
    */
   async setRules(config: AppConfig, rules: Record<string, number>): Promise<FetchResult<any>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/api/rules`;
     return requestWithFallback<any>(url, { method: 'POST', body: JSON.stringify(rules) }, config);
   },
@@ -184,7 +206,7 @@ export const WorkerApi = {
    * GET {WORKER_URL}/api/audit
    */
   async getAudit(config: AppConfig): Promise<FetchResult<any>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/api/audit`;
     return requestWithFallback<any>(url, { method: 'GET' }, config);
   },
@@ -194,7 +216,7 @@ export const WorkerApi = {
    * Body: { open: number }
    */
   async sendHeartbeat(config: AppConfig, openPositionsCount: number): Promise<FetchResult<{ ok: boolean }>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/heartbeat`;
     return requestWithFallback<{ ok: boolean }>(
       url,
@@ -211,7 +233,7 @@ export const WorkerApi = {
    * Body: { text: "PAPER BUY <mint>..." }
    */
   async sendNotify(config: AppConfig, text: string): Promise<FetchResult<{ ok: boolean }>> {
-    const base = config.workerUrl.replace(/\/+$/, '');
+    const base = getBaseUrl(config);
     const url = `${base}/notify`;
     return requestWithFallback<{ ok: boolean }>(
       url,

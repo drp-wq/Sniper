@@ -60,7 +60,20 @@ function hasNonEmptyAuthority(auth: any): boolean {
   return s.length > 0 && s !== '11111111111111111111111111111111';
 }
 
+export function getEffectiveRpcUrl(rpcUrl?: string): string {
+  const trimmed = rpcUrl?.trim();
+  if (
+    !trimmed ||
+    trimmed.includes('api.mainnet-beta.solana.com') ||
+    trimmed.includes('ab2f55ad-885a-44dc-8084-651a6530b26c')
+  ) {
+    return 'https://solana-rpc.publicnode.com';
+  }
+  return trimmed;
+}
+
 async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promise<T> {
+  const targetRpc = getEffectiveRpcUrl(rpcUrl);
   const payload = {
     jsonrpc: '2.0',
     id: Math.floor(Math.random() * 1000000),
@@ -73,7 +86,7 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
   if (bridge && typeof bridge.httpRequest === 'function') {
     try {
       const rawRes = bridge.httpRequest(
-        rpcUrl,
+        targetRpc,
         'POST',
         JSON.stringify({ 'content-type': 'application/json' }),
         bodyStr
@@ -93,7 +106,7 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
 
   // 1. Direct fetch
   try {
-    const res = await fetch(rpcUrl, {
+    const res = await fetch(targetRpc, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload),
@@ -115,7 +128,7 @@ async function callRpc<T>(rpcUrl: string, method: string, params: any[]): Promis
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-target-url': rpcUrl,
+          'x-target-url': targetRpc,
         },
         body: JSON.stringify(payload),
       });

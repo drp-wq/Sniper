@@ -42,7 +42,25 @@ interface DiagResult {
 
 export const TabSettings: React.FC = () => {
   const currentConfig = engine.getConfig();
-  const [form, setForm] = useState<AppConfig>({ ...currentConfig });
+  const [form, setForm] = useState<AppConfig>(() => {
+    const isBrowser = typeof window !== 'undefined';
+    const autoWorker =
+      isBrowser && window.location.origin && window.location.origin.startsWith('http')
+        ? window.location.origin
+        : 'https://sniper-relay.pjdebnath01.workers.dev';
+
+    return {
+      ...currentConfig,
+      workerUrl: currentConfig.workerUrl || autoWorker,
+      appKey: currentConfig.appKey || '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+      rpcUrl:
+        !currentConfig.rpcUrl ||
+        currentConfig.rpcUrl.includes('api.mainnet-beta.solana.com') ||
+        currentConfig.rpcUrl.includes('ab2f55ad-885a-44dc-8084-651a6530b26c')
+          ? 'https://solana-rpc.publicnode.com'
+          : currentConfig.rpcUrl,
+    };
+  });
   const [showAppKey, setShowAppKey] = useState(false);
   const [showRpcUrl, setShowRpcUrl] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
@@ -71,9 +89,25 @@ export const TabSettings: React.FC = () => {
     setDiagResults(null);
     const results: DiagResult[] = [];
 
+    const effectiveForm: AppConfig = {
+      ...form,
+      workerUrl:
+        form.workerUrl ||
+        (typeof window !== 'undefined' && window.location.origin.startsWith('http')
+          ? window.location.origin
+          : 'https://sniper-relay.pjdebnath01.workers.dev'),
+      appKey: form.appKey || '2ab53c05f92efaadb9dc163d5a05a589769bcffda2780ed1a6d59ac9a0939618',
+      rpcUrl:
+        !form.rpcUrl ||
+        form.rpcUrl.includes('api.mainnet-beta.solana.com') ||
+        form.rpcUrl.includes('ab2f55ad-885a-44dc-8084-651a6530b26c')
+          ? 'https://solana-rpc.publicnode.com'
+          : form.rpcUrl,
+    };
+
     // Test 1: Worker GET /export-kv (Verifies APP_KEY & Cloudflare Durable Object)
     try {
-      const workerRes = await WorkerApi.exportKv(form);
+      const workerRes = await WorkerApi.exportKv(effectiveForm);
       if (workerRes.data) {
         results.push({
           step: '1. Cloudflare Worker (SignalQueueDO)',
@@ -100,7 +134,7 @@ export const TabSettings: React.FC = () => {
 
     // Test 2: Solana JSON-RPC getSlot / getHealth
     try {
-      const rpcRes = await SolanaRpc.checkHealth(form.rpcUrl);
+      const rpcRes = await SolanaRpc.checkHealth(effectiveForm.rpcUrl);
       if (rpcRes.ok) {
         results.push({
           step: '2. Solana JSON-RPC Endpoint',
