@@ -58,10 +58,27 @@ export function extractSolanaAddress(input) {
   return clean ? clean[0] : trimmed;
 }
 
+function isMintParsed(parsed) {
+  if (!parsed || typeof parsed !== "object") return false;
+  if (parsed.type === "mint") return true;
+  if (parsed.type === "account") return false;
+  const info = parsed.info || parsed;
+  return (
+    info &&
+    typeof info === "object" &&
+    !info.tokenAmount &&
+    (info.mintAuthority !== undefined ||
+      info.freezeAuthority !== undefined ||
+      info.supply !== undefined ||
+      (info.decimals !== undefined && !info.owner))
+  );
+}
+
 // Helper to decode raw 82-byte SPL Mint if RPC returns base64 instead of jsonParsed
 function parseRawMintAccount(data) {
-  if (data?.parsed && data.parsed.type === "mint") {
-    return data.parsed.info;
+  if (data?.parsed) {
+    if (isMintParsed(data.parsed)) return data.parsed.info || data.parsed;
+    return null;
   }
   let b64 = "";
   if (Array.isArray(data) && typeof data[0] === "string") b64 = data[0];
@@ -106,8 +123,27 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
   }
 
   const data = acc?.value?.data;
-  const info = data?.parsed?.info || parseRawMintAccount(data);
-  if (!info) return { pass: false, reasons: ["not a parsed SPL mint"], top10Pct: null };
+  let info = isMintParsed(data?.parsed)
+    ? (data.parsed.info || data.parsed)
+    : parseRawMintAccount(data);
+
+  if (!info) {
+    // Check if input was a DEX pool / pair address (e.g. Raydium/Orca)
+    try {
+      const pairRes = await fetch(`https://api.dexscreener.com/latest/dex/pairs/solana/${cleanMint}`);
+      if (pairRes.ok) {
+        const pairJson = await pairRes.json();
+        const resolvedMint = pairJson.pairs?.[0]?.baseToken?.address || pairJson.pair?.baseToken?.address;
+        if (resolvedMint && resolvedMint !== cleanMint) {
+          return runGate(resolvedMint, gateCfg, rpcFn);
+        }
+      }
+    } catch {
+      // ignore pair fallback error
+    }
+    return { pass: false, reasons: ["not a parsed SPL mint"], top10Pct: null };
+  }
+
   if (info.mintAuthority) reasons.push("mint authority not revoked");
   if (info.freezeAuthority) reasons.push("freeze authority not revoked");
 
@@ -126,7 +162,7 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
   }
   if (!supply) {
     try {
-      supply = Number((await rpcFn("getTokenSupply", [mint]))?.value?.uiAmount ?? 0);
+      supply = Number((await rpcFn("getTokenSupply", [cleanMint]))?.value?.uiAmount ?? 0);
     } catch {
       // ignore
     }
@@ -134,7 +170,7 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
 
   let top10Pct = 0;
   try {
-    const largestRes = await rpcFn("getTokenLargestAccounts", [mint]);
+    const largestRes = await rpcFn("getTokenLargestAccounts", [cleanMint]);
     const largest = (largestRes?.value ?? []).slice(0, 20);
     if (largest.length > 0) {
       const jp = { encoding: "jsonParsed" };

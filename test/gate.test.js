@@ -220,3 +220,157 @@ test("runGate: passes when authorities are revoked and top-10 concentration is u
   assert.equal(res.reasons.length, 0);
   assert.equal(res.top10Pct, 15); // (100k + 50k) / 1M = 15%
 });
+
+test("SolanaRpc.runOnChainGate regression: supply initialization does not throw ReferenceError for info", async () => {
+  const { SolanaRpc } = await import("../dashboard/src/services/solanaRpc.ts");
+  const config = { rpcUrl: "https://solana-rpc.publicnode.com", maxTop10Pct: 35 };
+
+  const mockRpc = async (rpcUrl, method, params) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          owner: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          data: {
+            parsed: {
+              type: "mint",
+              info: {
+                mintAuthority: null,
+                freezeAuthority: null,
+                isInitialized: true,
+                supply: "1000000000",
+                decimals: 6,
+              },
+            },
+          },
+        },
+      };
+    }
+    if (method === "getTokenLargestAccounts") {
+      return {
+        value: [
+          { address: "Acc1", amount: "100000000", decimals: 6 },
+        ],
+      };
+    }
+    if (method === "getMultipleAccounts") {
+      const keys = params[0];
+      if (keys.includes("Acc1")) {
+        return {
+          value: [{ data: { parsed: { info: { owner: "HolderWallet1" } } } }],
+        };
+      }
+      return {
+        value: [{ owner: SYSTEM_PROGRAM }],
+      };
+    }
+    return { value: [] };
+  };
+
+  const verdict = await SolanaRpc.runOnChainGate(config, "CleanMint1111111111111111111111111111111111", { callRpc: mockRpc });
+
+  assert.equal(verdict.passed, true);
+  assert.equal(verdict.supply, 1000);
+  assert.equal(verdict.reasons.length, 0);
+  assert.ok(!verdict.reasons.some((r) => r.includes("info is not defined")));
+});
+
+test("runGate: rejects when account is a token account rather than a mint", async () => {
+  const gateCfg = { maxTop10Pct: 35 };
+
+  const mockRpc = async (method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "account",
+              info: {
+                isNative: false,
+                mint: "So11111111111111111111111111111111111111112",
+                owner: "Wallet11111111111111111111111111111111111111",
+                state: "initialized",
+                tokenAmount: { amount: "1000", decimals: 6, uiAmount: 0.001 },
+              },
+            },
+          },
+        },
+      };
+    }
+    return { value: [] };
+  };
+
+  const res = await runGate("TokenAccountInsteadOfMint", gateCfg, mockRpc);
+  assert.equal(res.pass, false);
+  assert.ok(res.reasons.some((r) => r.includes("not a parsed SPL mint")));
+});
+
+test("SolanaRpc.runOnChainGate: rejects when account is a token account rather than a mint", async () => {
+  const { SolanaRpc } = await import("../dashboard/src/services/solanaRpc.ts");
+  const config = { rpcUrl: "https://solana-rpc.publicnode.com", maxTop10Pct: 35 };
+
+  const mockRpc = async (rpcUrl, method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          owner: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          data: {
+            parsed: {
+              type: "account",
+              info: {
+                isNative: false,
+                mint: "So11111111111111111111111111111111111111112",
+                owner: "Wallet11111111111111111111111111111111111111",
+                state: "initialized",
+                tokenAmount: { amount: "1000", decimals: 6, uiAmount: 0.001 },
+              },
+            },
+          },
+        },
+      };
+    }
+    return { value: [] };
+  };
+
+  const verdict = await SolanaRpc.runOnChainGate(config, "TokenAccountInsteadOfMint", { callRpc: mockRpc });
+  assert.equal(verdict.passed, false);
+  assert.ok(verdict.reasons.some((r) => r.includes("Account is not a SPL mint")));
+});
+
+test("runGate: sanitizes wrapped url mint and passes cleanMint to supply and largest accounts", async () => {
+  const gateCfg = { maxTop10Pct: 35 };
+  const requestedMethods = [];
+
+  const mockRpc = async (method, params) => {
+    requestedMethods.push({ method, param: params[0] });
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "mint",
+              info: {
+                mintAuthority: null,
+                freezeAuthority: null,
+                supply: "1000000000",
+                decimals: 6,
+              },
+            },
+          },
+        },
+      };
+    }
+    if (method === "getTokenSupply") return { value: { uiAmount: 1000 } };
+    if (method === "getTokenLargestAccounts") return { value: [] };
+    return { value: [] };
+  };
+
+  const rawUrlMint = "https://dexscreener.com/solana/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+  const res = await runGate(rawUrlMint, gateCfg, mockRpc);
+  assert.equal(res.pass, true);
+
+  // All RPC queries must have received the sanitized base58 mint, not the URL
+  for (const call of requestedMethods) {
+    if (Array.isArray(call.param)) continue;
+    assert.equal(call.param, "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN");
+  }
+});

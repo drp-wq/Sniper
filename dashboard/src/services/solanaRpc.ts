@@ -81,9 +81,28 @@ export function extractSolanaAddress(input: string): string {
   return clean ? clean[0] : trimmed;
 }
 
+function isMintParsed(parsed: any): boolean {
+  if (!parsed || typeof parsed !== 'object') return false;
+  if (parsed.type === 'mint') return true;
+  if (parsed.type === 'account') return false;
+  const info = parsed.info || parsed;
+  return (
+    info &&
+    typeof info === 'object' &&
+    !info.tokenAmount &&
+    (info.mintAuthority !== undefined ||
+      info.freezeAuthority !== undefined ||
+      info.supply !== undefined ||
+      (info.decimals !== undefined && !info.owner))
+  );
+}
+
 function parseRawMintAccount(data: any): { isMint: boolean; info?: any } {
-  if (data?.parsed && data.parsed.type === 'mint') {
-    return { isMint: true, info: data.parsed.info };
+  if (data?.parsed) {
+    if (isMintParsed(data.parsed)) {
+      return { isMint: true, info: data.parsed.info || data.parsed };
+    }
+    return { isMint: false };
   }
   let b64 = '';
   if (Array.isArray(data) && typeof data[0] === 'string') {
@@ -248,6 +267,7 @@ export const SolanaRpc = {
     let totalSupply = 0;
     let top10Pct = 0;
     const top10Wallets: { address: string; pct: number; isVault?: boolean }[] = [];
+    let info: any = null;
 
     // Step 1: getAccountInfo with jsonParsed
     try {
@@ -301,7 +321,8 @@ export const SolanaRpc = {
       const ownerProgram = accountInfoRes.value.owner;
       isToken2022 = ownerProgram === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
-      const info = parsedData?.info || rawParsed.info;
+      const isParsedMint = isMintParsed(parsedData);
+      info = isParsedMint ? (parsedData.info || parsedData) : rawParsed.info;
       if (!info) {
         reasons.push(`Account is not a SPL mint (owner: ${ownerProgram})`);
         steps.push({
@@ -450,8 +471,8 @@ export const SolanaRpc = {
     // Step 2: Supply & Top Wallets Concentration Gate
     try {
       // 2a. Supply - extract directly from parsed account info if present, or fallback to getTokenSupply
-      let rawSupply = info.supply;
-      let decimals = typeof info.decimals === 'number' ? info.decimals : 6;
+      let rawSupply = info?.supply;
+      let decimals = typeof info?.decimals === 'number' ? info.decimals : 6;
 
       if (!rawSupply) {
         try {
