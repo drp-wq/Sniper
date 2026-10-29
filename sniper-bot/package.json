@@ -1,0 +1,14 @@
+{
+  "name": "sniper-bot",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "report": "node src/report.js",
+    "test": "node --test test/*.test.js",
+    "sim": "node scripts/simulate.js"
+  }
+}
