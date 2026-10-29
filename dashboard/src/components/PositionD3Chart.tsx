@@ -10,6 +10,7 @@ interface PricePoint {
 
 interface PositionD3ChartProps {
   symbol: string;
+  name?: string;
   entryPrice: number;
   currentPrice: number;
   stopPrice: number;
@@ -21,6 +22,7 @@ interface PositionD3ChartProps {
 
 export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
   symbol,
+  name,
   entryPrice,
   currentPrice,
   stopPrice,
@@ -146,7 +148,7 @@ export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-bold text-white uppercase tracking-wider flex items-center gap-1">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-            D3 Sub-Slot Chart
+            ${symbol} {name ? `· ${name}` : 'Live Chart'}
           </span>
           <div className="flex items-center gap-1 p-0.5 rounded-lg bg-slate-900/80 border border-white/5">
             {(['1m', '5m', '15m', 'LIVE'] as const).map((tf) => (

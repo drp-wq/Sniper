@@ -248,6 +248,19 @@ export const PositionsHUD: React.FC<PositionsHUDProps> = ({
         </div>
       </div>
 
+      {/* Demo Notification Banner if displaying sample/demo positions */}
+      {positions.some((p) => p.isDemo) && (
+        <div className="px-3.5 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="shrink-0 text-base">⚠️</span>
+            <span>Demo Mode: Displaying simulated positions for HUD inspection. Real paper trades open automatically from live signals.</span>
+          </div>
+          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/40 text-amber-200 shrink-0">
+            DEMO PREVIEW
+          </span>
+        </div>
+      )}
+
       {/* Active Positions List */}
       <div className="space-y-3">
         <div className="flex items-center justify-between px-1 gap-2 flex-wrap">
@@ -335,7 +348,15 @@ export const PositionsHUD: React.FC<PositionsHUDProps> = ({
                       <span className="text-[10px] font-mono text-slate-400">
                         {pos.dex}
                       </span>
+                      {pos.isDemo && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                          DEMO
+                        </span>
+                      )}
                       <span className="text-[10px] text-slate-500 font-mono">· {pos.timestamp}</span>
+                    </div>
+                    <div className="text-xs font-semibold text-slate-200 font-sans truncate max-w-[190px]">
+                      {pos.name || pos.symbol}
                     </div>
                     <div className="text-[11px] font-mono text-slate-400">
                       {pos.tokensAmount.toLocaleString()} tokens · ${pos.currentPriceUsd.toFixed(6)}
@@ -650,6 +671,7 @@ export const PositionsHUD: React.FC<PositionsHUDProps> = ({
                     <div className="p-3 rounded-2xl bg-[#060810]/95 border border-white/10 shadow-lg space-y-2">
                       <PositionD3Chart
                         symbol={pos.symbol}
+                        name={pos.name}
                         entryPrice={pos.entryPriceUsd}
                         currentPrice={pos.currentPriceUsd}
                         stopPrice={pos.stopPriceUsd}

@@ -26,6 +26,7 @@ import { haptics } from './services/haptics';
 import { engine } from './services/engine';
 import { WorkerApi } from './services/workerApi';
 import { TelegramService } from './services/telegram';
+import { SolanaRpc } from './services/solanaRpc';
 import { CheckCircle2, AlertOctagon, BellRing } from 'lucide-react';
 
 export default function App() {
@@ -89,7 +90,8 @@ export default function App() {
       smartProfitLockMode: pos.smartProfitLockMode ?? 'BREAKEVEN_SHIELD',
       smartProfitFloorPercent: pos.smartProfitFloorPercent ?? 0,
       smartProfitLockStage: pos.smartProfitLockStage ?? 0,
-      timestamp: new Date(pos.openedAt).toISOString()
+      timestamp: new Date(pos.openedAt).toISOString(),
+      isDemo: false
     };
   }, []);
 
@@ -117,7 +119,8 @@ export default function App() {
       top10HoldersPercent: log.gateVerdict?.top10Pct || 14.2,
       devHoldingPercent: 2.1,
       lpBurned: true,
-      detectedSecondsAgo: Math.max(1, Math.round((Date.now() - log.receivedAt) / 1000))
+      detectedSecondsAgo: Math.max(1, Math.round((Date.now() - log.receivedAt) / 1000)),
+      isDemo: false
     };
   }, []);
 
@@ -196,12 +199,74 @@ export default function App() {
     }
   };
 
-  // High-frequency price tick evaluator and alert triggering
+  // Real Solana RPC telemetry monitor (Slot and Latency)
+  useEffect(() => {
+    let isMounted = true;
+    const updateRpcTelemetry = async () => {
+      const cfg = engine.getConfig();
+      const targetRpc = activeRpc.id === 'solana-public' ? 'https://solana-rpc.publicnode.com' : cfg.rpcUrl;
+      const res = await SolanaRpc.checkHealth(targetRpc);
+      if (!isMounted) return;
+
+      if (res.ok) {
+        const latency = res.latencyMs;
+        const slot = res.slot || activeRpc.blockHeight;
+        const status = latency < 120 ? 'optimal' : latency < 300 ? 'moderate' : 'degraded';
+        setActiveRpc((prev) => ({
+          ...prev,
+          latencyMs: latency,
+          blockHeight: slot,
+          status,
+        }));
+        setRpcNodes((nodes) =>
+          nodes.map((n) =>
+            n.id === activeRpc.id
+              ? { ...n, latencyMs: latency, blockHeight: slot, status }
+              : n
+          )
+        );
+      } else {
+        setActiveRpc((prev) => ({ ...prev, latencyMs: res.latencyMs, status: 'degraded' }));
+      }
+    };
+
+    updateRpcTelemetry();
+    const interval = setInterval(updateRpcTelemetry, 10000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeRpc.id]);
+
+  // Demo simulator tick evaluator (runs ONLY when displaying demo preview data; real positions update via DexScreener quotes)
   useEffect(() => {
     const interval = setInterval(() => {
-      // Fluctuate prices and evaluate dynamic trailing stop and profit lock
-      setPositions((prev) =>
-        prev.map((pos) => {
+      setPositions((prev) => {
+        // If real paper positions exist from engine, do NOT fabricate synthetic prices!
+        const hasLivePositions = prev.some((p) => !p.isDemo);
+        if (hasLivePositions) {
+          // Only evaluate pending alerts on live quotes
+          return prev.map((pos) => {
+            if (!pos.alerts || pos.alerts.length === 0) return pos;
+            const updatedAlerts = pos.alerts.map((alert) => {
+              if (!alert.triggered) {
+                const conditionMet =
+                  alert.type === 'TAKE_PROFIT'
+                    ? pos.currentPriceUsd >= alert.targetPriceUsd
+                    : pos.currentPriceUsd <= alert.targetPriceUsd;
+                if (conditionMet) {
+                  triggerSystemPriceAlert(pos, alert, pos.currentPriceUsd);
+                  return { ...alert, triggered: true };
+                }
+              }
+              return alert;
+            });
+            return { ...pos, alerts: updatedAlerts };
+          });
+        }
+
+        // Demo positions only: gentle mock tick to demonstrate HUD functionality
+        return prev.map((pos) => {
           const delta = (Math.random() - 0.48) * 0.00008 * (pos.currentPriceUsd > 0.01 ? 10 : 1);
           const nextPrice = Math.max(0.000001, pos.currentPriceUsd + delta);
           const highest = Math.max(pos.highestPriceUsd, nextPrice);
@@ -275,18 +340,9 @@ export default function App() {
             takeProfitTiers: updatedTiers,
             alerts: updatedAlerts
           };
-        })
-      );
-
-      // Fluctuate RPC latency telemetry slightly
-      setRpcNodes((prev) =>
-        prev.map((node) => ({
-          ...node,
-          latencyMs: Math.max(18, node.latencyMs + Math.floor((Math.random() - 0.5) * 6)),
-          blockHeight: node.blockHeight + 1
-        }))
-      );
-    }, 2500);
+        });
+      });
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [showToast]);
@@ -370,10 +426,14 @@ export default function App() {
       smartProfitLockMode: 'BREAKEVEN_SHIELD',
       smartProfitFloorPercent: 0,
       smartProfitLockStage: 0,
-      timestamp: 'Just now'
+      timestamp: 'Just now',
+      isDemo: false
     };
 
-    setPositions((prev) => [newPosition, ...prev]);
+    setPositions((prev) => {
+      const liveOnly = prev.filter((p) => !p.isDemo);
+      return [newPosition, ...liveOnly];
+    });
     setSignals((prev) =>
       prev.map((s) => (s.id === signal.id ? { ...s, isSniped: true } : s))
     );

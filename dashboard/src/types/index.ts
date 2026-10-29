@@ -38,6 +38,7 @@ export interface TokenSignal {
   detectedSecondsAgo: number;
   bondingCurveProgress?: number;
   isSniped?: boolean;
+  isDemo?: boolean;
 }
 
 export interface SafetyAuditResult {
@@ -133,6 +134,7 @@ export interface Position {
   smartProfitFloorPercent?: number;
   smartProfitLockStage?: number;
   timestamp: string;
+  isDemo?: boolean;
 }
 
 export interface SniperConfig {

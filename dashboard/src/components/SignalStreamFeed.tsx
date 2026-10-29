@@ -115,6 +115,14 @@ export const SignalStreamFeed: React.FC<SignalStreamFeedProps> = ({
         </div>
       </div>
 
+      {/* Demo Notification Banner if displaying sample/demo data */}
+      {signals.some((s) => s.isDemo) && (
+        <div className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-[11px] font-mono flex items-center gap-2">
+          <span className="shrink-0 text-base">⚠️</span>
+          <span>Sample signal vectors displayed for interface preview. Live on-chain signals stream automatically as detected.</span>
+        </div>
+      )}
+
       {/* Signal Cards Feed with Motion Spring Transitions */}
       <div className="space-y-2.5">
         <AnimatePresence mode="popLayout">
@@ -157,9 +165,18 @@ export const SignalStreamFeed: React.FC<SignalStreamFeedProps> = ({
                         >
                           {signal.dex}
                         </span>
+                        {signal.isDemo ? (
+                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                            DEMO
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 animate-pulse">
+                            LIVE
+                          </span>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-400 font-sans truncate max-w-[160px]">
-                        {signal.name}
+                      <div className="text-[12px] text-slate-200 font-sans truncate max-w-[170px] font-medium">
+                        {signal.name || signal.symbol}
                       </div>
                     </div>
                   </div>

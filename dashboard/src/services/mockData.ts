@@ -61,7 +61,8 @@ export const INITIAL_SIGNALS: TokenSignal[] = [
     devHoldingPercent: 1.8,
     lpBurned: true,
     detectedSecondsAgo: 8,
-    bondingCurveProgress: 88
+    bondingCurveProgress: 88,
+    isDemo: true
   },
   {
     id: 'sig-2',
@@ -83,7 +84,8 @@ export const INITIAL_SIGNALS: TokenSignal[] = [
     top10HoldersPercent: 16.2,
     devHoldingPercent: 3.1,
     lpBurned: true,
-    detectedSecondsAgo: 24
+    detectedSecondsAgo: 24,
+    isDemo: true
   },
   {
     id: 'sig-3',
@@ -105,7 +107,8 @@ export const INITIAL_SIGNALS: TokenSignal[] = [
     top10HoldersPercent: 14.5,
     devHoldingPercent: 2.4,
     lpBurned: true,
-    detectedSecondsAgo: 65
+    detectedSecondsAgo: 65,
+    isDemo: true
   },
   {
     id: 'sig-4',
@@ -127,7 +130,8 @@ export const INITIAL_SIGNALS: TokenSignal[] = [
     top10HoldersPercent: 88.0,
     devHoldingPercent: 85.0,
     lpBurned: false,
-    detectedSecondsAgo: 110
+    detectedSecondsAgo: 110,
+    isDemo: true
   },
   {
     id: 'sig-5',
@@ -150,7 +154,8 @@ export const INITIAL_SIGNALS: TokenSignal[] = [
     devHoldingPercent: 35.0,
     lpBurned: true,
     detectedSecondsAgo: 145,
-    bondingCurveProgress: 45
+    bondingCurveProgress: 45,
+    isDemo: true
   }
 ];
 
@@ -199,7 +204,8 @@ export const INITIAL_POSITIONS: Position[] = [
     smartProfitLockMode: 'AGGRESSIVE_RATCHET',
     smartProfitFloorPercent: 40,
     smartProfitLockStage: 2,
-    timestamp: '18m ago'
+    timestamp: '18m ago',
+    isDemo: true
   },
   {
     id: 'pos-2',
@@ -245,7 +251,8 @@ export const INITIAL_POSITIONS: Position[] = [
     smartProfitLockMode: 'BREAKEVEN_SHIELD',
     smartProfitFloorPercent: 2,
     smartProfitLockStage: 1,
-    timestamp: '42m ago'
+    timestamp: '42m ago',
+    isDemo: true
   },
   {
     id: 'pos-3',
@@ -278,7 +285,8 @@ export const INITIAL_POSITIONS: Position[] = [
     smartProfitLockMode: 'BREAKEVEN_SHIELD',
     smartProfitFloorPercent: 0,
     smartProfitLockStage: 0,
-    timestamp: '1h 12m ago'
+    timestamp: '1h 12m ago',
+    isDemo: true
   }
 ];
 
