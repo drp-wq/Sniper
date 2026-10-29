@@ -58,26 +58,39 @@ export function extractSolanaAddress(input) {
   return clean ? clean[0] : trimmed;
 }
 
-function isMintParsed(parsed) {
+export function isMintParsed(parsed) {
   if (!parsed || typeof parsed !== "object") return false;
-  if (parsed.type === "mint") return true;
-  if (parsed.type === "account") return false;
-  const info = parsed.info || parsed;
-  return (
-    info &&
-    typeof info === "object" &&
-    !info.tokenAmount &&
-    (info.mintAuthority !== undefined ||
-      info.freezeAuthority !== undefined ||
-      info.supply !== undefined ||
-      (info.decimals !== undefined && !info.owner))
-  );
+  if (parsed.type && parsed.type !== "mint") return false;
+
+  // If parsed.type === "mint", parsed.info must be a non-null object
+  if (parsed.type === "mint" && (!parsed.info || typeof parsed.info !== "object" || Array.isArray(parsed.info))) {
+    return false;
+  }
+
+  const info = parsed.type === "mint" ? parsed.info : (parsed.info || parsed);
+  if (!info || typeof info !== "object" || Array.isArray(info)) return false;
+
+  // Explicitly reject token accounts masquerading as mints
+  if ("tokenAmount" in info || "accountType" in info) return false;
+  if (info.owner && typeof info.decimals !== "number") return false;
+
+  // Must have at least one recognized SPL Mint property
+  const hasDecimals = typeof info.decimals === "number" && Number.isFinite(info.decimals);
+  const hasSupply = info.supply !== undefined && info.supply !== null;
+  const hasAuth = "mintAuthority" in info || "freezeAuthority" in info;
+
+  // Reject empty or unrecognized objects
+  if (!hasDecimals && !hasSupply && !hasAuth) return false;
+
+  return true;
 }
 
 // Helper to decode raw 82-byte SPL Mint if RPC returns base64 instead of jsonParsed
 function parseRawMintAccount(data) {
   if (data?.parsed) {
-    if (isMintParsed(data.parsed)) return data.parsed.info || data.parsed;
+    if (isMintParsed(data.parsed)) {
+      return data.parsed.type === "mint" && data.parsed.info ? data.parsed.info : (data.parsed.info || data.parsed);
+    }
     return null;
   }
   let b64 = "";
@@ -124,7 +137,7 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
 
   const data = acc?.value?.data;
   let info = isMintParsed(data?.parsed)
-    ? (data.parsed.info || data.parsed)
+    ? (data.parsed.type === "mint" && data.parsed.info ? data.parsed.info : (data.parsed.info || data.parsed))
     : parseRawMintAccount(data);
 
   if (!info) {
@@ -144,8 +157,21 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
     return { pass: false, reasons: ["not a parsed SPL mint"], top10Pct: null };
   }
 
-  if (info.mintAuthority) reasons.push("mint authority not revoked");
-  if (info.freezeAuthority) reasons.push("freeze authority not revoked");
+  // Authorities must be explicitly null (revoked)
+  if (info.mintAuthority !== null) {
+    reasons.push(
+      typeof info.mintAuthority === "string"
+        ? "mint authority not revoked"
+        : "mint authority not revoked or unreadable"
+    );
+  }
+  if (info.freezeAuthority !== null) {
+    reasons.push(
+      typeof info.freezeAuthority === "string"
+        ? "freeze authority not revoked"
+        : "freeze authority not revoked or unreadable"
+    );
+  }
 
   // Check dangerous Token-2022 extensions
   for (const extReason of inspectMintExtensions(info)) {
@@ -166,6 +192,11 @@ export async function runGate(mint, gateCfg, rpcFn = rpc) {
     } catch {
       // ignore
     }
+  }
+
+  const isWsol = cleanMint === "So11111111111111111111111111111111111111112";
+  if (!isWsol && (!supply || supply <= 0 || !Number.isFinite(supply))) {
+    reasons.push("token supply is zero or unreadable");
   }
 
   let top10Pct = 0;

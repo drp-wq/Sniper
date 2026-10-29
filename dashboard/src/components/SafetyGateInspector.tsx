@@ -15,7 +15,7 @@ import {
   Zap
 } from 'lucide-react';
 import { SafetyAuditResult } from '../types';
-import { auditTokenMint, TEST_VECTORS, TestVector } from '../services/coinGate';
+import { auditTokenMint, auditTokenMintAsync, TEST_VECTORS, TestVector } from '../services/coinGate';
 import { haptics } from '../services/haptics';
 
 interface SafetyGateInspectorProps {
@@ -42,51 +42,75 @@ export const SafetyGateInspector: React.FC<SafetyGateInspectorProps> = ({
     setCompletedSteps(0);
     haptics.selection();
 
+    let cancelled = false;
+
     // Sequence through the 5 on-chain safety gates with animated verification steps
     const timer1 = setTimeout(() => {
-      setCompletedSteps(1);
-      haptics.light();
+      if (!cancelled) {
+        setCompletedSteps(1);
+        haptics.light();
+      }
     }, 200);
 
     const timer2 = setTimeout(() => {
-      setCompletedSteps(2);
-      haptics.light();
+      if (!cancelled) {
+        setCompletedSteps(2);
+        haptics.light();
+      }
     }, 450);
 
     const timer3 = setTimeout(() => {
-      setCompletedSteps(3);
-      haptics.light();
+      if (!cancelled) {
+        setCompletedSteps(3);
+        haptics.light();
+      }
     }, 700);
 
     const timer4 = setTimeout(() => {
-      setCompletedSteps(4);
-      haptics.light();
+      if (!cancelled) {
+        setCompletedSteps(4);
+        haptics.light();
+      }
     }, 950);
 
     const timer5 = setTimeout(() => {
-      setCompletedSteps(5);
-      haptics.light();
+      if (!cancelled) {
+        setCompletedSteps(5);
+        haptics.light();
+      }
     }, 1200);
 
-    const timer6 = setTimeout(() => {
-      const result = auditTokenMint(targetInput);
-      setAuditResult(result);
-      setCompletedSteps(6);
-      setIsAuditing(false);
-      if (result.status === 'PASSED') {
-        haptics.success();
-      } else {
-        haptics.error();
-      }
-    }, 1450);
+    // Concurrently trigger the real / test-vector audit
+    auditTokenMintAsync(targetInput)
+      .then((result) => {
+        if (cancelled) return;
+        setTimeout(() => {
+          if (cancelled) return;
+          setAuditResult(result);
+          setCompletedSteps(6);
+          setIsAuditing(false);
+          if (result.status === 'PASSED') {
+            haptics.success();
+          } else {
+            haptics.error();
+          }
+        }, 1300);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const fallback = auditTokenMint(targetInput);
+        setAuditResult(fallback);
+        setCompletedSteps(6);
+        setIsAuditing(false);
+      });
 
     return () => {
+      cancelled = true;
       clearTimeout(timer1);
       clearTimeout(timer2);
       clearTimeout(timer3);
       clearTimeout(timer4);
       clearTimeout(timer5);
-      clearTimeout(timer6);
     };
   };
 

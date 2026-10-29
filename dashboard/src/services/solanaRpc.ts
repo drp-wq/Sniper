@@ -81,26 +81,38 @@ export function extractSolanaAddress(input: string): string {
   return clean ? clean[0] : trimmed;
 }
 
-function isMintParsed(parsed: any): boolean {
+export function isMintParsed(parsed: any): boolean {
   if (!parsed || typeof parsed !== 'object') return false;
-  if (parsed.type === 'mint') return true;
-  if (parsed.type === 'account') return false;
-  const info = parsed.info || parsed;
-  return (
-    info &&
-    typeof info === 'object' &&
-    !info.tokenAmount &&
-    (info.mintAuthority !== undefined ||
-      info.freezeAuthority !== undefined ||
-      info.supply !== undefined ||
-      (info.decimals !== undefined && !info.owner))
-  );
+  if (parsed.type && parsed.type !== 'mint') return false;
+
+  // If parsed.type === "mint", parsed.info must be a non-null object
+  if (parsed.type === 'mint' && (!parsed.info || typeof parsed.info !== 'object' || Array.isArray(parsed.info))) {
+    return false;
+  }
+
+  const info = parsed.type === 'mint' ? parsed.info : (parsed.info || parsed);
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
+
+  // Explicitly reject token accounts masquerading as mints
+  if ('tokenAmount' in info || 'accountType' in info) return false;
+  if (info.owner && typeof info.decimals !== 'number') return false;
+
+  // Must have at least one recognized SPL Mint property
+  const hasDecimals = typeof info.decimals === 'number' && Number.isFinite(info.decimals);
+  const hasSupply = info.supply !== undefined && info.supply !== null;
+  const hasAuth = 'mintAuthority' in info || 'freezeAuthority' in info;
+
+  // Reject empty or unrecognized objects
+  if (!hasDecimals && !hasSupply && !hasAuth) return false;
+
+  return true;
 }
 
 function parseRawMintAccount(data: any): { isMint: boolean; info?: any } {
   if (data?.parsed) {
     if (isMintParsed(data.parsed)) {
-      return { isMint: true, info: data.parsed.info || data.parsed };
+      const info = data.parsed.type === 'mint' && data.parsed.info ? data.parsed.info : (data.parsed.info || data.parsed);
+      return { isMint: true, info };
     }
     return { isMint: false };
   }
@@ -322,7 +334,9 @@ export const SolanaRpc = {
       isToken2022 = ownerProgram === 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
       const isParsedMint = isMintParsed(parsedData);
-      info = isParsedMint ? (parsedData.info || parsedData) : rawParsed.info;
+      info = isParsedMint
+        ? (parsedData.type === 'mint' && parsedData.info ? parsedData.info : (parsedData.info || parsedData))
+        : rawParsed.info;
       if (!info) {
         reasons.push(`Account is not a SPL mint (owner: ${ownerProgram})`);
         steps.push({
@@ -338,18 +352,19 @@ export const SolanaRpc = {
           checkedAt: Date.now(),
         };
       }
-      mintAuthority = info.mintAuthority || null;
-      freezeAuthority = info.freezeAuthority || null;
+      mintAuthority = info.mintAuthority ?? (info.mintAuthority === null ? null : 'unspecified');
+      freezeAuthority = info.freezeAuthority ?? (info.freezeAuthority === null ? null : 'unspecified');
       const isInitialized = info.isInitialized !== false;
 
       // Rule: Reject if mintAuthority !== null
-      if (mintAuthority !== null) {
+      if (info.mintAuthority !== null) {
         passed = false;
-        reasons.push(`Mint authority active (${mintAuthority.slice(0, 4)}...${mintAuthority.slice(-4)})`);
+        const authStr = typeof info.mintAuthority === 'string' ? info.mintAuthority : '';
+        reasons.push(authStr ? `Mint authority active (${authStr.slice(0, 4)}...${authStr.slice(-4)})` : 'Mint authority unreadable or not revoked');
         steps.push({
           step: 'Mint Authority',
           passed: false,
-          detail: `Active mint authority: ${mintAuthority}`,
+          detail: authStr ? `Active mint authority: ${authStr}` : 'Mint authority unreadable or not revoked',
         });
       } else {
         steps.push({
@@ -360,13 +375,14 @@ export const SolanaRpc = {
       }
 
       // Rule: Reject if freezeAuthority !== null
-      if (freezeAuthority !== null) {
+      if (info.freezeAuthority !== null) {
         passed = false;
-        reasons.push(`Freeze authority active (${freezeAuthority.slice(0, 4)}...${freezeAuthority.slice(-4)})`);
+        const authStr = typeof info.freezeAuthority === 'string' ? info.freezeAuthority : '';
+        reasons.push(authStr ? `Freeze authority active (${authStr.slice(0, 4)}...${authStr.slice(-4)})` : 'Freeze authority unreadable or not revoked');
         steps.push({
           step: 'Freeze Authority',
           passed: false,
-          detail: `Active freeze authority: ${freezeAuthority}`,
+          detail: authStr ? `Active freeze authority: ${authStr}` : 'Freeze authority unreadable or not revoked',
         });
       } else {
         steps.push({

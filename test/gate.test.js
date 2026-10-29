@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runGate, inspectMintExtensions } from "../src/gate.js";
+import { runGate, inspectMintExtensions, isMintParsed } from "../src/gate.js";
 
 const SYSTEM_PROGRAM = "11111111111111111111111111111111";
 
@@ -373,4 +373,186 @@ test("runGate: sanitizes wrapped url mint and passes cleanMint to supply and lar
     if (Array.isArray(call.param)) continue;
     assert.equal(call.param, "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN");
   }
+});
+
+test("isMintParsed: strictly verifies authentic mint and rejects null info and empty info", () => {
+  assert.equal(isMintParsed(null), false);
+  assert.equal(isMintParsed(undefined), false);
+  assert.equal(isMintParsed({}), false);
+  assert.equal(isMintParsed({ type: "mint" }), false);
+  assert.equal(isMintParsed({ type: "mint", info: null }), false);
+  assert.equal(isMintParsed({ type: "mint", info: {} }), false);
+  assert.equal(isMintParsed({ type: "account", info: { tokenAmount: {} } }), false);
+  assert.equal(isMintParsed({ info: { tokenAmount: {} } }), false);
+
+  assert.equal(
+    isMintParsed({
+      type: "mint",
+      info: {
+        decimals: 6,
+        supply: "1000",
+        mintAuthority: null,
+        freezeAuthority: null,
+      },
+    }),
+    true
+  );
+  assert.equal(
+    isMintParsed({
+      decimals: 9,
+      supply: "1000000",
+      mintAuthority: null,
+      freezeAuthority: null,
+    }),
+    true
+  );
+});
+
+test("runGate: rejects malformed mint account where parsed.info is null or empty (Info Gate fix)", async () => {
+  const gateCfg = { maxTop10Pct: 35 };
+
+  // Case 1: parsed.info is null
+  const mockRpcNullInfo = async (method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "mint",
+              info: null,
+            },
+          },
+        },
+      };
+    }
+    return { value: null };
+  };
+
+  const resNull = await runGate("NullInfoMint111111111111111111111111111111", gateCfg, mockRpcNullInfo);
+  assert.equal(resNull.pass, false);
+  assert.ok(resNull.reasons.some((r) => r.includes("not a parsed SPL mint")));
+
+  // Case 2: parsed.info is an empty object
+  const mockRpcEmptyInfo = async (method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "mint",
+              info: {},
+            },
+          },
+        },
+      };
+    }
+    return { value: null };
+  };
+
+  const resEmpty = await runGate("EmptyInfoMint111111111111111111111111111111", gateCfg, mockRpcEmptyInfo);
+  assert.equal(resEmpty.pass, false);
+  assert.ok(resEmpty.reasons.some((r) => r.includes("not a parsed SPL mint")));
+});
+
+test("runGate: rejects when mintAuthority is unreadable or undefined", async () => {
+  const gateCfg = { maxTop10Pct: 35 };
+
+  const mockRpc = async (method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "mint",
+              info: {
+                // mintAuthority missing/undefined
+                freezeAuthority: null,
+                decimals: 6,
+                supply: "1000000",
+              },
+            },
+          },
+        },
+      };
+    }
+    if (method === "getTokenSupply") return { value: { uiAmount: 1 } };
+    if (method === "getTokenLargestAccounts") return { value: [] };
+    return { value: [] };
+  };
+
+  const res = await runGate("UnreadableAuthMint1111111111111111111111111", gateCfg, mockRpc);
+  assert.equal(res.pass, false);
+  assert.ok(res.reasons.some((r) => r.includes("mint authority not revoked or unreadable")));
+});
+
+test("runGate: rejects when token supply is 0 or unreadable", async () => {
+  const gateCfg = { maxTop10Pct: 35 };
+
+  const mockRpcZeroSupply = async (method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          data: {
+            parsed: {
+              type: "mint",
+              info: {
+                mintAuthority: null,
+                freezeAuthority: null,
+                decimals: 6,
+                supply: "0",
+              },
+            },
+          },
+        },
+      };
+    }
+    if (method === "getTokenSupply") return { value: { uiAmount: 0 } };
+    if (method === "getTokenLargestAccounts") return { value: [] };
+    return { value: [] };
+  };
+
+  const res = await runGate("ZeroSupplyMint11111111111111111111111111111", gateCfg, mockRpcZeroSupply);
+  assert.equal(res.pass, false);
+  assert.ok(res.reasons.some((r) => r.includes("token supply is zero or unreadable")));
+});
+
+test("SolanaRpc.runOnChainGate: rejects malformed mint account where parsed.info is null", async () => {
+  const { SolanaRpc } = await import("../dashboard/src/services/solanaRpc.ts");
+  const config = { rpcUrl: "https://solana-rpc.publicnode.com", maxTop10Pct: 35 };
+
+  const mockRpc = async (rpcUrl, method) => {
+    if (method === "getAccountInfo") {
+      return {
+        value: {
+          owner: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          data: {
+            parsed: {
+              type: "mint",
+              info: null,
+            },
+          },
+        },
+      };
+    }
+    return { value: null };
+  };
+
+  const verdict = await SolanaRpc.runOnChainGate(config, "MalformedNullMint1111111111111111111111111", { callRpc: mockRpc });
+  assert.equal(verdict.passed, false);
+  assert.ok(verdict.reasons.some((r) => r.includes("Account is not a SPL mint")));
+});
+
+test("coinGate: isMintParsed and auditTokenMint reject malformed null info", async () => {
+  const { isMintParsed: isMintParsedUI, auditTokenMint } = await import("../dashboard/src/services/coinGate.ts");
+
+  assert.equal(isMintParsedUI({ type: "mint", info: null }), false);
+  assert.equal(isMintParsedUI({ type: "mint", info: {} }), false);
+  assert.equal(isMintParsedUI({ type: "account", info: { tokenAmount: {} } }), false);
+
+  const audit = auditTokenMint("NullSupplyVector111111111111111111111111111");
+  assert.equal(audit.status, "REJECTED");
+  const typeCheck = audit.checks.find((c) => c.id === "mint-type-check");
+  assert.ok(typeCheck);
+  assert.equal(typeCheck.passed, false);
+  assert.ok(typeCheck.details.includes("FAILED: isMintParsed rejected malformed mint"));
 });

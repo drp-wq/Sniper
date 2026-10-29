@@ -1,28 +1,40 @@
-import { SafetyAuditResult } from '../types';
+import type { SafetyAuditResult, AppConfig } from '../types/index.ts';
+import { SolanaRpc } from './solanaRpc.ts';
+import { StorageService } from './storage.ts';
 
 /**
  * Strict Mint Detection (isMintParsed)
  * Implemented to solve Issue 1: "The Info Object Misclassification"
- * where token accounts (parsed.type === 'account') falsely passed naive gates
- * because token accounts lack mintAuthority and freezeAuthority.
+ * where token accounts (parsed.type === 'account') or malformed mints ({ type: 'mint', info: null })
+ * falsely passed naive gates.
  */
 export function isMintParsed(parsed: unknown): boolean {
   if (!parsed || typeof parsed !== 'object') return false;
   const p = parsed as Record<string, unknown>;
-  
-  if (p.type === 'mint') return true;
-  if (p.type === 'account') return false; // Explicitly reject token accounts
-  
-  const info = (p.info || p) as Record<string, unknown> | undefined;
-  return !!(
-    info &&
-    typeof info === 'object' &&
-    !info.tokenAmount && // Token accounts contain tokenAmount
-    (info.mintAuthority !== undefined ||
-      info.freezeAuthority !== undefined ||
-      info.supply !== undefined ||
-      (info.decimals !== undefined && !info.owner))
-  );
+
+  if (p.type && p.type !== 'mint') return false;
+
+  // If p.type === 'mint', p.info must be a non-null object
+  if (p.type === 'mint' && (!p.info || typeof p.info !== 'object' || Array.isArray(p.info))) {
+    return false;
+  }
+
+  const info = (p.type === 'mint' ? p.info : (p.info || p)) as Record<string, unknown> | undefined;
+  if (!info || typeof info !== 'object' || Array.isArray(info)) return false;
+
+  // Explicitly reject token accounts masquerading as mints
+  if ('tokenAmount' in info || 'accountType' in info) return false;
+  if (info.owner && typeof info.decimals !== 'number') return false;
+
+  // Must have at least one recognized SPL Mint property
+  const hasDecimals = typeof info.decimals === 'number' && Number.isFinite(info.decimals);
+  const hasSupply = info.supply !== undefined && info.supply !== null;
+  const hasAuth = 'mintAuthority' in info || 'freezeAuthority' in info;
+
+  // Reject empty or unrecognized objects
+  if (!hasDecimals && !hasSupply && !hasAuth) return false;
+
+  return true;
 }
 
 /**
@@ -274,7 +286,7 @@ export function auditTokenMint(rawInput: string): SafetyAuditResult {
       resolvedMint: sanitized,
       symbol: 'NULL_INFO',
       name: 'Malformed Mint Descriptor',
-      safetyScore: 12,
+      safetyScore: 0,
       status: 'REJECTED',
       typeClassification: 'malformed',
       checks: [
@@ -282,9 +294,9 @@ export function auditTokenMint(rawInput: string): SafetyAuditResult {
           id: 'mint-type-check',
           label: 'Strict Mint Type Verification',
           description: 'Confirms valid mint structure in Solana RPC payload',
-          passed: true,
+          passed: false,
           critical: true,
-          details: 'Parsed type identified as mint, but info object is null.'
+          details: 'FAILED: isMintParsed rejected malformed mint (info object is null/missing).'
         },
         {
           id: 'safe-access',
@@ -322,7 +334,7 @@ export function auditTokenMint(rawInput: string): SafetyAuditResult {
         hasInterestBearing: false
       },
       vulnerabilityAnalysis: {
-        isMintParsedCheck: true,
+        isMintParsedCheck: false,
         safePropertyAccess: true,
         addressSanitized: true,
         dexPairFallbackResolved: false,
@@ -494,4 +506,134 @@ export function auditTokenMint(rawInput: string): SafetyAuditResult {
       ]
     }
   };
+}
+
+/**
+ * Asynchronous on-chain audit: runs real SolanaRpc.runOnChainGate for production mints,
+ * while seamlessly supporting the local interactive test vectors for education / demos.
+ */
+export async function auditTokenMintAsync(
+  rawInput: string,
+  config?: AppConfig
+): Promise<SafetyAuditResult> {
+  const sanitized = sanitizeMintAddress(rawInput);
+
+  // If input matches a known test vector or mock exploit keyword, use the deterministic auditTokenMint
+  const isTestVector =
+    TEST_VECTORS.some((v) => v.id === rawInput || v.input === rawInput || v.name === rawInput) ||
+    rawInput.toLowerCase().includes('spoof') ||
+    rawInput.startsWith('Accnt') ||
+    rawInput.toLowerCase().includes('nullsupply') ||
+    rawInput.startsWith('Null') ||
+    rawInput.toLowerCase().includes('honeytax') ||
+    rawInput.startsWith('Honey');
+
+  if (isTestVector) {
+    return auditTokenMint(rawInput);
+  }
+
+  // Real on-chain audit via SolanaRpc
+  const effectiveConfig = config || StorageService.getConfig();
+  try {
+    const verdict = await SolanaRpc.runOnChainGate(effectiveConfig, rawInput);
+
+    const checks = verdict.steps.map((s) => ({
+      id: s.step.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+      label: s.step,
+      description: s.detail,
+      passed: s.passed,
+      critical: !s.step.includes('Holders') && !s.step.includes('Concentration'),
+      details: s.passed ? `PASSED: ${s.detail}` : `FAILED: ${s.detail}`,
+    }));
+
+    const passedCount = checks.filter((c) => c.passed).length;
+    const totalCount = Math.max(checks.length, 1);
+    const baseScore = Math.round((passedCount / totalCount) * 100);
+    const safetyScore = verdict.passed ? Math.max(baseScore, 90) : Math.min(baseScore, 40);
+
+    const isMalformed = verdict.reasons.some(
+      (r) => r.includes('not a SPL mint') || r.includes('not initialized') || r.includes('unreadable')
+    );
+    const isTokenAccount = verdict.reasons.some(
+      (r) => r.includes('Account is not a SPL mint') && r.includes('account')
+    );
+
+    const holderDistribution =
+      verdict.top10Wallets && verdict.top10Wallets.length > 0
+        ? verdict.top10Wallets.map((w, idx) => ({
+            label: w.isVault ? `Vault #${idx + 1}` : `Wallet #${idx + 1}`,
+            percent: Number(w.pct.toFixed(2)),
+            color: idx === 0 ? '#10B981' : idx === 1 ? '#06B6D4' : idx < 5 ? '#8B5CF6' : '#94A3B8',
+            address: w.address,
+          }))
+        : [
+            {
+              label: 'Circulating',
+              percent: 100,
+              color: verdict.passed ? '#10B981' : '#EF4444',
+              address: sanitized || 'Unknown',
+            },
+          ];
+
+    return {
+      mint: rawInput,
+      resolvedMint: verdict.mint,
+      symbol: verdict.mint ? `${verdict.mint.slice(0, 4)}...${verdict.mint.slice(-4)}` : 'TOKEN',
+      name: `Token ${verdict.mint ? verdict.mint.slice(0, 6) : 'Unknown'}`,
+      safetyScore,
+      status: verdict.passed ? 'PASSED' : safetyScore > 50 ? 'HIGH_RISK' : 'REJECTED',
+      typeClassification: isTokenAccount ? 'account' : isMalformed ? 'malformed' : 'mint',
+      checks,
+      holderDistribution,
+      token2022Risk: {
+        hasTransferFee: verdict.activeExtensions?.includes('transferFeeConfig') ?? false,
+        feeBasisPoints: 0,
+        hasDefaultAccountState: verdict.activeExtensions?.includes('defaultAccountState') ?? false,
+        hasPermanentDelegate: verdict.activeExtensions?.includes('permanentDelegate') ?? false,
+        hasInterestBearing: verdict.activeExtensions?.includes('interestBearingMint') ?? false,
+      },
+      vulnerabilityAnalysis: {
+        isMintParsedCheck: !isTokenAccount && !isMalformed,
+        safePropertyAccess: true,
+        addressSanitized: rawInput !== sanitized,
+        dexPairFallbackResolved: verdict.mint !== sanitized,
+        vulnerabilityNotes: verdict.reasons.length > 0 ? verdict.reasons : ['All on-chain invariant gates passed.'],
+      },
+    };
+  } catch (err: any) {
+    return {
+      mint: rawInput,
+      resolvedMint: sanitized,
+      symbol: 'ERROR',
+      name: 'On-Chain Query Failed',
+      safetyScore: 0,
+      status: 'REJECTED',
+      typeClassification: 'malformed',
+      checks: [
+        {
+          id: 'rpc-fetch-error',
+          label: 'RPC Query',
+          description: 'Solana mainnet RPC query',
+          passed: false,
+          critical: true,
+          details: `Error: ${err.message || 'Network failure'}`,
+        },
+      ],
+      holderDistribution: [{ label: 'Unknown', percent: 100, color: '#EF4444', address: '0x0' }],
+      token2022Risk: {
+        hasTransferFee: false,
+        feeBasisPoints: 0,
+        hasDefaultAccountState: false,
+        hasPermanentDelegate: false,
+        hasInterestBearing: false,
+      },
+      vulnerabilityAnalysis: {
+        isMintParsedCheck: false,
+        safePropertyAccess: false,
+        addressSanitized: true,
+        dexPairFallbackResolved: false,
+        vulnerabilityNotes: [`RPC query error: ${err.message || 'unknown'}`],
+      },
+    };
+  }
 }
