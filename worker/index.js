@@ -920,8 +920,34 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
-    // Mini App page (no secrets inside; all data comes from authenticated /api calls).
-    if ((path === "/app" || path === "/") && req.method === "GET") {
+    // Static Assets for Telegram Mini App / Web Terminal (if configured via wrangler [assets])
+    if (env?.ASSETS) {
+      if (
+        path === "/" ||
+        path === "/app" ||
+        path === "/index.html" ||
+        path.startsWith("/assets/") ||
+        path.endsWith(".js") ||
+        path.endsWith(".css") ||
+        path.endsWith(".json") ||
+        path.endsWith(".svg") ||
+        path.endsWith(".html") ||
+        path.endsWith(".png") ||
+        path.endsWith(".ico")
+      ) {
+        const assetReq =
+          path === "/" || path === "/app"
+            ? new Request(new URL("/index.html", req.url), req)
+            : req;
+        const assetRes = await env.ASSETS.fetch(assetReq);
+        if (assetRes && assetRes.status < 400) {
+          return assetRes;
+        }
+      }
+    }
+
+    // Mini App page (fallback when ASSETS binding is unavailable).
+    if ((path === "/app" || path === "/") && (req.method === "GET" || req.method === "HEAD")) {
       return new Response(APP_HTML, {
         headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" },
       });
@@ -1030,8 +1056,15 @@ export default {
       return handleWithKvFallback(req, env);
     }
 
-    // Everything below requires the app key.
-    if (!env.APP_KEY || req.headers.get("x-key") !== env.APP_KEY) {
+    // Authenticate via APP_KEY (phone bot) or verified Telegram initData (Mini App client)
+    const hasAppKey = Boolean(env.APP_KEY && req.headers.get("x-key") === env.APP_KEY);
+    let isAuthedTg = false;
+    if (!hasAppKey && req.headers.get("x-init")) {
+      const auth = await authenticateTelegram(env, req.headers.get("x-init"));
+      if (auth.ok) isAuthedTg = true;
+    }
+
+    if (!hasAppKey && !isAuthedTg) {
       return json({ error: "unauthorized" }, 401);
     }
 

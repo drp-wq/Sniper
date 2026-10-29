@@ -3,6 +3,10 @@ main = "worker/index.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
+[assets]
+directory = "./app/assets"
+binding = "ASSETS"
+
 [[kv_namespaces]]
 binding = "KV"
 id = "45cb5b16318f4534bce256f6d1fa9d5d"
