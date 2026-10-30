@@ -12,6 +12,7 @@
     "test:telegram": "node scripts/verify-telegram.js",
     "scanner": "node src/scanner.js",
     "sim": "node scripts/simulate.js",
+    "backtest": "node scripts/execute-backtest.js",
     "build:dashboard": "./scripts/build-dashboard.sh",
     "lint:dashboard": "cd dashboard && npm run lint",
     "ci": "npm test && npm run lint:dashboard && npm run build:dashboard"

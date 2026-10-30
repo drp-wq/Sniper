@@ -1,7 +1,13 @@
 .env
+.env.local
+.env.*.local
 logs/
 node_modules/
 dist/
 HALT
 *.key
+*.pem
+*.secret
 keystore*
+id.json
+keypair*.json

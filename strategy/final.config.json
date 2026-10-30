@@ -1,0 +1,58 @@
+{
+  "version": "2.0.0-paper",
+  "generatedDate": "2026-10-30T15:18:00Z",
+  "strategyName": "Strategy 3: Calibrated Quality Gate & Delayed Momentum",
+  "executionMode": "PAPER_ONLY",
+  "liveTradingEnabled": false,
+  "liveReadinessGate": "NOT_READY",
+  "liveBlockReason": "Live-Readiness Gate failed on paper trading expectancy (-9.88%) and paper-vs-backtest latency gap. Live capital strictly locked.",
+  "safetyGate": {
+    "requireMintAuthorityRevoked": true,
+    "requireFreezeAuthorityRevoked": true,
+    "rejectToken2022MaliciousExtensions": true,
+    "forbiddenExtensions": [
+      "TransferFeeConfig",
+      "PermanentDelegate",
+      "TransferHook",
+      "DefaultAccountStateFrozen",
+      "NonTransferable"
+    ],
+    "maxTop10HolderPercent": 25.0,
+    "maxDevWalletPercent": 5.0,
+    "minInitialLiquidityUsd": 15000,
+    "minSignalAgeSeconds": 45,
+    "maxSignalAgeSeconds": 180
+  },
+  "sizing": {
+    "model": "capped_fractional_kelly",
+    "kellyFraction": 0.25,
+    "maxExposureFraction": 0.02,
+    "baselineFixedFraction": 0.01,
+    "maxConcurrentOpenPositions": 5,
+    "maxDailyLossFraction": 0.50
+  },
+  "exitLadder": {
+    "stopLossPercent": 20.0,
+    "takeProfitHalfPercent": 100.0,
+    "autoBreakevenAtTakeProfit": true,
+    "trailingStopArmPercent": 40.0,
+    "trailingStopPullbackPercent": 20.0,
+    "dynamicTrailing2xPullbackPercent": 15.0,
+    "dynamicTrailing3xPullbackPercent": 10.0,
+    "liquidityDropExitPercent": 20.0,
+    "timeStopSeconds": 120,
+    "timeStopBandPercent": 5.0,
+    "maxHoldMinutes": 30
+  },
+  "executionSlippageCaps": {
+    "maxEntrySlippagePercent": 5.0,
+    "maxExitSlippagePercent": 8.0,
+    "maxPriorityFeeMicroLamports": 100000
+  },
+  "killSwitches": {
+    "diskHaltFileEnabled": true,
+    "maxDailyLossBreakerPercent": 50.0,
+    "maxConsecutiveRpcFailures": 3,
+    "autoHaltOnAbnormalSlippage": true
+  }
+}

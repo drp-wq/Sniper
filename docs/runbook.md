@@ -171,3 +171,42 @@ To revert working tree to baseline without affecting paper logs:
 git checkout HEAD -- src/ worker/ dashboard/
 npm test
 ```
+
+---
+
+## 8. Incident Response & Secret Rotation
+
+### Incident 1: Suspected Private Key Compromise (Live Mode Only)
+1. **Immediate Execution Freeze**:
+   ```bash
+   touch /workspaces/Sniper/HALT
+   kill $(pgrep -f "run-24h.sh") $(pgrep -f "main.js")
+   ```
+2. **Sweep Remaining Burner Wallet Funds**:
+   Using Solana CLI from a secure offline or clean terminal, sweep all SOL and tokens from the burner wallet to a verified cold storage address:
+   ```bash
+   solana transfer <COLD_STORAGE_PUBKEY> ALL --from <BURNER_KEYPAIR_PATH>
+   ```
+3. **De-authenticate and Invalidate**:
+   Discard the compromised burner keypair completely. Never reuse the address.
+
+### Incident 2: Telegram Bot Token or Worker APP_KEY Exposure
+1. **Rotate Telegram Bot Token**:
+   - Open Telegram $\rightarrow$ Message `@BotFather`.
+   - Send `/revoke` $\rightarrow$ Select bot $\rightarrow$ Receive new `TG_TOKEN`.
+2. **Rotate Worker APP_KEY**:
+   - Generate a new 256-bit cryptographically secure hex secret:
+     ```bash
+     node -e "console.log(crypto.randomBytes(32).toString('hex'))"
+     ```
+   - Update Cloudflare Worker secret:
+     ```bash
+     wrangler secret put APP_KEY
+     ```
+   - Update local `.env` and restart the supervisor.
+
+### Incident 3: RPC Outage or Poisoning Detection
+1. If the active RPC endpoint returns persistent 429 rate limits or unparseable JSON-RPC responses:
+2. Update `RPC_URL` in `.env` to a verified healthy alternative (e.g. `https://solana-rpc.publicnode.com` or private Helius/QuickNode URL).
+3. The RPC client (`src/rpc.js`) will automatically reconnect on the next poll cycle with zero state loss.
+
