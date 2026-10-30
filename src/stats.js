@@ -35,3 +35,13 @@ export function computeStats(rows) {
     byReason,
   };
 }
+
+export function computeDailyPnl(rows, targetDate = new Date()) {
+  const targetIso = (targetDate instanceof Date ? targetDate : new Date(targetDate)).toISOString().slice(0, 10);
+  return Number(
+    rows
+      .filter((r) => r.ev === "paper_close" && typeof r.ts === "string" && r.ts.startsWith(targetIso))
+      .reduce((acc, r) => acc + (Number(r.pnl) || 0), 0)
+      .toFixed(2)
+  );
+}

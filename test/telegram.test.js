@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tg, authenticateTelegram, getRole, authorizeAction, checkRateLimit, resetRateLimits } from "../worker/index.js";
-import { sendTelegram, notify } from "../src/api.js";
+import { tg, authenticateTelegram, getRole, authorizeAction, checkRateLimit, resetRateLimits, isAllowedProxyDestination } from "../worker/index.js";
+import { sendTelegram, notify, getGmgnUrl, getDexScreenerUrl } from "../src/api.js";
 import { loadConfig } from "../src/config.js";
 import { redactSecrets } from "../src/rpc.js";
 
@@ -285,4 +285,73 @@ test("checkRateLimit blocks requests that exceed window threshold", () => {
   const r3 = checkRateLimit(key, opt);
   assert.equal(r3.allowed, false);
   assert.equal(r3.remaining, 0);
+});
+
+test("getGmgnUrl and getDexScreenerUrl format canonical trading URLs", () => {
+  const mint = "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263";
+  assert.equal(getGmgnUrl(mint), `https://gmgn.ai/sol/token/${mint}`);
+  assert.equal(getDexScreenerUrl(mint), `https://dexscreener.com/solana/${mint}`);
+});
+
+test("tg and sendTelegram pass inline_keyboard reply_markup and options", async () => {
+  let workerPayload = null;
+  const mockFetchWorker = async (_url, opts) => {
+    workerPayload = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+
+  const env = { TG_TOKEN: "bot-token", TG_CHAT: "12345" };
+  const mint = "TokenMint123";
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        { text: "⚡ GMGN Chart", url: getGmgnUrl(mint) },
+        { text: "📈 DexScreener", url: getDexScreenerUrl(mint) },
+      ],
+    ],
+  };
+
+  const tgRes = await tg(env, "Alert with buttons", {
+    fetch: mockFetchWorker,
+    reply_markup: replyMarkup,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
+
+  assert.equal(tgRes, true);
+  assert.equal(workerPayload.text, "Alert with buttons");
+  assert.equal(workerPayload.parse_mode, "HTML");
+  assert.equal(workerPayload.disable_web_page_preview, true);
+  assert.deepEqual(workerPayload.reply_markup, replyMarkup);
+
+  let directPayload = null;
+  const mockFetchDirect = async (_url, opts) => {
+    directPayload = JSON.parse(opts.body);
+    return { ok: true };
+  };
+
+  const directRes = await sendTelegram("Direct alert", {
+    tgToken: "token123",
+    tgChat: "chat123",
+    fetch: mockFetchDirect,
+    reply_markup: replyMarkup,
+  });
+
+  assert.equal(directRes, true);
+  assert.deepEqual(directPayload.reply_markup, replyMarkup);
+});
+
+test("isAllowedProxyDestination permits GMGN and blocks unapproved domains", () => {
+  const resGmgn = isAllowedProxyDestination("https://gmgn.ai/defi/quotation/v1/rank/sol/swaps/1h", {});
+  assert.equal(resGmgn.allowed, true);
+  assert.equal(resGmgn.host, "gmgn.ai");
+
+  const resGmgnSub = isAllowedProxyDestination("https://api.gmgn.ai/v1/token", {});
+  assert.equal(resGmgnSub.allowed, true);
+
+  const resBlocked = isAllowedProxyDestination("https://malicious.evil.com/leak", {});
+  assert.equal(resBlocked.allowed, false);
+
+  const resIp = isAllowedProxyDestination("https://169.254.169.254/metadata", {});
+  assert.equal(resIp.allowed, false);
 });

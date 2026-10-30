@@ -415,8 +415,39 @@ export const PositionsHUD: React.FC<PositionsHUDProps> = ({
                 </div>
               </div>
 
-              {/* Direct Badges: Smart Profit Lock Quick Badge & Price Alert Badges */}
+              {/* Direct Badges: GMGN, DexScreener, Smart Profit Lock & Price Alerts */}
               <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                {/* GMGN Direct Link Badge */}
+                <a
+                  href={`https://gmgn.ai/sol/token/${pos.mint || pos.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    haptics.light();
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-purple-950/60 text-purple-300 border border-purple-500/40 hover:bg-purple-900/60 transition-all active:scale-95"
+                  title="Open in GMGN.ai"
+                >
+                  <span className="text-amber-400 font-bold text-[10px]">⚡</span>
+                  <span>GMGN</span>
+                </a>
+
+                {/* DexScreener Direct Link Badge */}
+                <a
+                  href={`https://dexscreener.com/solana/${pos.mint || pos.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    haptics.light();
+                  }}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-slate-900/80 text-cyan-300 border border-cyan-500/30 hover:bg-slate-800 transition-all active:scale-95"
+                  title="Open in DexScreener"
+                >
+                  <span>DexS</span>
+                </a>
+
                 {/* Smart Profit Lock Quick Badge */}
                 <button
                   onClick={(e) => {

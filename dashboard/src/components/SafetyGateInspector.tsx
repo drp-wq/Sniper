@@ -307,21 +307,50 @@ export const SafetyGateInspector: React.FC<SafetyGateInspectorProps> = ({
                   </div>
                 )}
 
-                {/* Action Trigger */}
-                {auditResult.status === 'PASSED' && onQuickSnipe && (
-                  <div className="pt-1">
+                {/* Action Trigger & External Links */}
+                <div className="flex items-center gap-2 pt-1 flex-wrap justify-center sm:justify-start">
+                  <a
+                    href={`https://gmgn.ai/sol/token/${auditResult.resolvedMint}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      haptics.light();
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-purple-950/60 text-purple-300 border border-purple-500/40 hover:bg-purple-900/60 transition-all active:scale-95"
+                    title="Open in GMGN.ai"
+                  >
+                    <span className="text-amber-400 font-bold">⚡</span>
+                    <span>GMGN Chart</span>
+                  </a>
+
+                  <a
+                    href={`https://dexscreener.com/solana/${auditResult.resolvedMint}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      haptics.light();
+                    }}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-slate-900/80 text-cyan-300 border border-cyan-500/30 hover:bg-slate-800 transition-all active:scale-95"
+                    title="Open in DexScreener"
+                  >
+                    <span>DexScreener</span>
+                  </a>
+
+                  {auditResult.status === 'PASSED' && onQuickSnipe && (
                     <button
                       onClick={() => {
                         haptics.heavy();
                         onQuickSnipe(auditResult.resolvedMint, auditResult.symbol);
                       }}
-                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-bold text-xs flex items-center gap-2 transition-all active:scale-95 shadow-lg shadow-emerald-500/25 glow-emerald"
+                      className="px-3 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono font-bold text-xs flex items-center gap-1.5 transition-all active:scale-95 shadow-md shadow-emerald-500/25 glow-emerald"
                     >
-                      <Zap className="w-4 h-4" />
-                      <span>Snipe {auditResult.symbol} (0.5 SOL)</span>
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>Snipe {auditResult.symbol}</span>
                     </button>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>

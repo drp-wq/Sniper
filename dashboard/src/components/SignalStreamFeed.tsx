@@ -251,16 +251,32 @@ export const SignalStreamFeed: React.FC<SignalStreamFeedProps> = ({
 
                 {/* Card Action Buttons */}
                 <div className="flex items-center gap-2 pt-1 border-t border-white/5">
+                  {/* GMGN Direct Link Pill */}
+                  <a
+                    href={`https://gmgn.ai/sol/token/${signal.mint}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      haptics.light();
+                    }}
+                    className="py-2 px-2.5 rounded-xl bg-purple-950/40 hover:bg-purple-900/60 text-purple-300 border border-purple-500/30 font-mono text-xs flex items-center justify-center gap-1 transition-all active:scale-95 shrink-0"
+                    title="Open GMGN Chart & Intelligence"
+                  >
+                    <span className="text-amber-400 font-bold text-xs">⚡</span>
+                    <span>GMGN</span>
+                  </a>
+
                   {/* Quick Audit Action Chip */}
                   <button
                     onClick={() => {
                       haptics.selection();
                       onQuickAudit(signal.mint);
                     }}
-                    className="flex-1 py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/10 font-mono text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                    className="flex-1 py-2 px-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-white/10 font-mono text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95"
                   >
                     <ShieldCheck className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>Quick Audit</span>
+                    <span>Audit</span>
                   </button>
 
                   {/* 1-Tap Snipe Button */}
@@ -270,7 +286,7 @@ export const SignalStreamFeed: React.FC<SignalStreamFeedProps> = ({
                       onSnipeToken(signal);
                     }}
                     disabled={signal.isSniped}
-                    className={`flex-1 py-2 px-3 rounded-xl font-mono font-bold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 ${
+                    className={`flex-1 py-2 px-2.5 rounded-xl font-mono font-bold text-xs flex items-center justify-center gap-1.5 transition-all active:scale-95 ${
                       signal.isSniped
                         ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-500/40 cursor-default'
                         : isDanger
@@ -279,7 +295,7 @@ export const SignalStreamFeed: React.FC<SignalStreamFeedProps> = ({
                     }`}
                   >
                     <Zap className="w-3.5 h-3.5" />
-                    <span>{signal.isSniped ? 'Sniped (In HUD)' : `Snipe ${defaultBuySol} SOL`}</span>
+                    <span>{signal.isSniped ? 'In HUD' : `Snipe ${defaultBuySol}`}</span>
                   </button>
                 </div>
               </motion.div>

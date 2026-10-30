@@ -48,8 +48,9 @@ export function isAllowedProxyDestination(targetUrl, env) {
       return { allowed: false, reason: "IP literals and local hosts are forbidden" };
     }
 
-    // Approved domain allowlist for DexScreener, Solana Public RPC, Raydium, Pump.fun, and verified RPC providers
+    // Approved domain allowlist for DexScreener, GMGN, Solana Public RPC, Raydium, Pump.fun, and verified RPC providers
     const isDexScreener = host === "api.dexscreener.com";
+    const isGmgn = host === "gmgn.ai" || host.endsWith(".gmgn.ai");
     const isSolanaRpc = host === "api.mainnet-beta.solana.com" || host === "api.devnet.solana.com" || host === "api.testnet.solana.com";
     const isRaydium = host === "api-v3.raydium.io";
     const isPumpFun = host === "frontend-api.pump.fun";
@@ -74,6 +75,7 @@ export function isAllowedProxyDestination(targetUrl, env) {
 
     if (
       isDexScreener ||
+      isGmgn ||
       isSolanaRpc ||
       isRaydium ||
       isPumpFun ||
@@ -338,13 +340,18 @@ export async function tg(env, text, deps = {}) {
   if (!token || !chat) return false;
   const fetchFn = deps.fetch ?? fetch;
   try {
+    const payload = {
+      chat_id: chat,
+      text: String(text).slice(0, 3500),
+    };
+    if (deps.parse_mode) payload.parse_mode = deps.parse_mode;
+    if (deps.reply_markup) payload.reply_markup = deps.reply_markup;
+    if (deps.disable_web_page_preview !== undefined) payload.disable_web_page_preview = deps.disable_web_page_preview;
+
     const res = await fetchFn(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chat,
-        text: String(text).slice(0, 3500),
-      }),
+      body: JSON.stringify(payload),
     });
     return Boolean(res?.ok);
   } catch {
@@ -1270,7 +1277,11 @@ export default {
 
     if (path === "/notify" && req.method === "POST") {
       const b = await req.json().catch(() => ({}));
-      const sent = await tg(env, b?.text ?? "");
+      const sent = await tg(env, b?.text ?? "", {
+        parse_mode: b?.parse_mode,
+        reply_markup: b?.reply_markup,
+        disable_web_page_preview: b?.disable_web_page_preview,
+      });
       return json({ ok: true, sent: Boolean(sent) });
     }
 

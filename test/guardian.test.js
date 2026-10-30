@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { unlinkSync, existsSync } from "node:fs";
 import { RiskGuardian } from "../src/guardian.js";
-import { resetPositions, openPaper, closePaperPosition, getDailyRealizedPnl } from "../src/paper.js";
+import { resetPositions, openPaper, closePaperPosition, getDailyRealizedPnl, savePositions, loadPositions, isOpen } from "../src/paper.js";
+import { computeDailyPnl } from "../src/stats.js";
 
 test("RiskGuardian: allows valid signal when all checks pass", () => {
   const sig = { mint: "Token_Alpha_1", ts: Date.now() };
@@ -67,4 +69,41 @@ test("openPaper: sends alert with suitable entry price, stop-loss, and take-prof
   assert.ok(alertText.includes("Stop-Loss: $0.0394 (-25%)"));
   assert.ok(alertText.includes("Take-Profit: $0.1050 (+100% | Sell 50%)"));
   assert.ok(alertText.includes("Trailing Stop: Arms at $0.0788 (+50%)"));
+  assert.ok(alertText.includes("GMGN: https://gmgn.ai/sol/token/Token_Alert_Test"));
+  assert.ok(alertText.includes("DexScreener: https://dexscreener.com/solana/Token_Alert_Test"));
+});
+
+test("positions persist to disk via savePositions and recover safely on restart via loadPositions", async () => {
+  const testFile = "logs/test_positions.json";
+  if (existsSync(testFile)) unlinkSync(testFile);
+
+  resetPositions(testFile);
+  const mockQuote = async () => ({ price: 1.5, liqUsd: 80000, symbol: "TEST", name: "Test Coin" });
+  await openPaper("Mint_Persist_1", "sigP1", { getQuote: mockQuote, retryDelayMs: 0 });
+  savePositions(testFile);
+
+  // Clear in-memory map without deleting disk file
+  assert.equal(isOpen("Mint_Persist_1"), true);
+  
+  // Reload from disk
+  const recovered = loadPositions(testFile);
+  assert.equal(recovered, 1);
+  assert.equal(isOpen("Mint_Persist_1"), true);
+
+  // Clean up
+  resetPositions(testFile);
+  if (existsSync(testFile)) unlinkSync(testFile);
+});
+
+test("computeDailyPnl correctly isolates current day closed positions", () => {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const rows = [
+    { ts: `${todayIso}T08:00:00Z`, ev: "paper_close", pnl: 25.5 },
+    { ts: `${todayIso}T11:00:00Z`, ev: "paper_close", pnl: -10.2 },
+    { ts: "2026-01-01T10:00:00Z", ev: "paper_close", pnl: 100.0 }, // Previous date, ignored
+    { ts: `${todayIso}T12:00:00Z`, ev: "gate", pass: true },
+  ];
+
+  const pnlToday = computeDailyPnl(rows);
+  assert.equal(pnlToday, 15.3);
 });

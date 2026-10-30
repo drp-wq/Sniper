@@ -1,19 +1,51 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { cfg } from "./config.js";
 import { getQuote } from "./price.js";
 import { log } from "./log.js";
-import { notify } from "./api.js";
+import { notify, getGmgnUrl, getDexScreenerUrl } from "./api.js";
 
 const R = cfg.rules;
 const positions = new Map(); // mint -> position
+const POSITIONS_FILE = "logs/positions.json";
 let dailyRealizedPnl = 0;
 
 export const openCount = () => positions.size;
 export const isOpen = (mint) => positions.has(mint);
-export const resetPositions = () => {
+
+export function savePositions(file = POSITIONS_FILE) {
+  try {
+    const list = [...positions.values()];
+    writeFileSync(file, JSON.stringify(list, null, 2));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function loadPositions(file = POSITIONS_FILE) {
+  if (!existsSync(file)) return 0;
+  try {
+    const list = JSON.parse(readFileSync(file, "utf8"));
+    if (Array.isArray(list)) {
+      positions.clear();
+      for (const p of list) {
+        if (p?.mint) positions.set(p.mint, p);
+      }
+      return positions.size;
+    }
+  } catch {}
+  return 0;
+}
+
+export const resetPositions = (file = POSITIONS_FILE) => {
   positions.clear();
   dailyRealizedPnl = 0;
+  try {
+    if (existsSync(file)) writeFileSync(file, "[]");
+  } catch {}
 };
 export const getDailyRealizedPnl = () => dailyRealizedPnl;
+export const setDailyRealizedPnl = (val) => { dailyRealizedPnl = Number(val) || 0; };
 export const resetDailyRealizedPnl = () => { dailyRealizedPnl = 0; };
 
 export function formatPrice(px) {
@@ -69,6 +101,7 @@ export async function openPaper(mint, sig, deps = {}) {
     realized: 0,       // pct points already banked (weighted)
     misses: 0,
   });
+  savePositions();
   logFn("paper_open", { mint, symbol, name, entry, liqUsd: q.liqUsd, slPrice, tpPrice, trailArmPrice });
   notifyFn(
     `🟢 [PAPER BUY] ${name} ($${symbol})\n` +
@@ -77,7 +110,19 @@ export async function openPaper(mint, sig, deps = {}) {
     `🛑 Stop-Loss: ${formatPrice(slPrice)} (-${R.stopLoss}%)\n` +
     `🎯 Take-Profit: ${formatPrice(tpPrice)} (+${R.takeProfit}% | Sell 50%)\n` +
     `🚀 Trailing Stop: Arms at ${formatPrice(trailArmPrice)} (+${R.trailArm}%)\n` +
-    `💧 Liquidity: $${Math.round(q.liqUsd).toLocaleString()}`
+    `💧 Liquidity: $${Math.round(q.liqUsd).toLocaleString()}\n` +
+    `⚡ GMGN: ${getGmgnUrl(mint)}\n` +
+    `📈 DexScreener: ${getDexScreenerUrl(mint)}`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "⚡ GMGN Chart", url: getGmgnUrl(mint) },
+            { text: "📈 DexScreener", url: getDexScreenerUrl(mint) },
+          ],
+        ],
+      },
+    }
   );
   return true;
 }
@@ -136,6 +181,7 @@ function close(p, reason, pct, deps = {}) {
   const weight = p.tookHalf ? 0.5 : 1;
   const pnl = p.realized + weight * pct;
   positions.delete(p.mint);
+  savePositions();
   dailyRealizedPnl += pnl;
   const heldSec = Math.round((now - p.openedAt) / 1000);
   logFn("paper_close", { mint: p.mint, symbol: p.symbol, name: p.name, reason, pnl: Number(pnl.toFixed(2)), heldSec });
@@ -144,7 +190,19 @@ function close(p, reason, pct, deps = {}) {
     `Mint: ${p.mint}\n` +
     `Reason: ${reason}\n` +
     `PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%\n` +
-    `Held: ${heldSec}s`
+    `Held: ${heldSec}s\n` +
+    `⚡ GMGN: ${getGmgnUrl(p.mint)}\n` +
+    `📈 DexScreener: ${getDexScreenerUrl(p.mint)}`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "⚡ GMGN Chart", url: getGmgnUrl(p.mint) },
+            { text: "📈 DexScreener", url: getDexScreenerUrl(p.mint) },
+          ],
+        ],
+      },
+    }
   );
 }
 
@@ -178,11 +236,24 @@ export async function tick(deps = {}) {
       if (res.partial) {
         p.tookHalf = true;
         p.realized += 0.5 * res.pct;
+        savePositions();
         logFn("paper_partial", { mint: p.mint, reason: res.partial, pct: Number(res.pct.toFixed(1)) });
         notifyFn(
           `💰 [PAPER 50% TP BANKED] ${p.name || p.mint} ($${p.symbol || 'TOKEN'})\n` +
           `Gain: +${res.pct.toFixed(1)}%\n` +
-          `Status: 50% position banked, trailing remaining 50%`
+          `Status: 50% position banked, trailing remaining 50%\n` +
+          `⚡ GMGN: ${getGmgnUrl(p.mint)}\n` +
+          `📈 DexScreener: ${getDexScreenerUrl(p.mint)}`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "⚡ GMGN Chart", url: getGmgnUrl(p.mint) },
+                  { text: "📈 DexScreener", url: getDexScreenerUrl(p.mint) },
+                ],
+              ],
+            },
+          }
         );
       } else {
         close(p, res.exit, res.pct, { logFn, notifyFn, now });
