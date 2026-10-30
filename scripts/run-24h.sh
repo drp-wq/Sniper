@@ -66,7 +66,7 @@ while true; do
   fi
 
   log_msg "Starting node src/main.js (restart count: $RESTART_COUNT)..."
-  node src/main.js &
+  node src/main.js >> "$LOGS_DIR/runner.log" 2>&1 &
   RUNNER_PID=$!
 
   wait "$RUNNER_PID" || EXIT_CODE=$?

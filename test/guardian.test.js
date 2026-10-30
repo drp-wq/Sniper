@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { unlinkSync, existsSync } from "node:fs";
+import { unlinkSync, existsSync, writeFileSync } from "node:fs";
 import { RiskGuardian } from "../src/guardian.js";
-import { resetPositions, openPaper, closePaperPosition, getDailyRealizedPnl, savePositions, loadPositions, isOpen } from "../src/paper.js";
+import { resetPositions, openPaper, closePaperPosition, getDailyRealizedPnl, savePositions, loadPositions, isOpen, tick } from "../src/paper.js";
 import { computeDailyPnl } from "../src/stats.js";
 
 test("RiskGuardian: allows valid signal when all checks pass", () => {
@@ -89,6 +89,23 @@ test("positions persist to disk via savePositions and recover safely on restart 
   const recovered = loadPositions(testFile);
   assert.equal(recovered, 1);
   assert.equal(isOpen("Mint_Persist_1"), true);
+
+  // Verify tick evaluation works on recovered position after simulated crash
+  let exitNotified = false;
+  const mockDropQuote = async () => ({ price: 0.8, liqUsd: 80000 }); // drops below SL (1.5 * 1.05 * 0.75 = 1.18125)
+  await tick({
+    getQuote: mockDropQuote,
+    notifyFn: () => { exitNotified = true; },
+  });
+  assert.equal(isOpen("Mint_Persist_1"), false);
+  assert.equal(exitNotified, true);
+
+  // Test corrupt file crash resilience
+  writeFileSync(testFile, "{malformed_json_corrupt_data");
+  assert.doesNotThrow(() => {
+    const corruptRecovered = loadPositions(testFile);
+    assert.equal(corruptRecovered, 0);
+  });
 
   // Clean up
   resetPositions(testFile);

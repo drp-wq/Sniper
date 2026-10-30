@@ -67,8 +67,8 @@ export const snapshot = () =>
 
 export async function openPaper(mint, sig, deps = {}) {
   const quoteFn = deps.getQuote ?? getQuote;
-  const logFn = deps.log ?? log;
-  const notifyFn = deps.notify ?? notify;
+  const logFn = deps.log ?? deps.logFn ?? log;
+  const notifyFn = deps.notify ?? deps.notifyFn ?? notify;
   const now = deps.now ? deps.now() : Date.now();
   const retryDelayMs = deps.retryDelayMs !== undefined ? deps.retryDelayMs : 2000;
 
@@ -175,8 +175,8 @@ export function evaluate(p, q, now = Date.now()) {
 }
 
 function close(p, reason, pct, deps = {}) {
-  const logFn = deps.logFn ?? log;
-  const notifyFn = deps.notifyFn ?? notify;
+  const logFn = deps.log ?? deps.logFn ?? log;
+  const notifyFn = deps.notify ?? deps.notifyFn ?? notify;
   const now = deps.now ?? Date.now();
   const weight = p.tookHalf ? 0.5 : 1;
   const pnl = p.realized + weight * pct;
@@ -216,8 +216,8 @@ export function closePaperPosition(mint, reason = "manual_close", deps = {}) {
 let busy = false;
 export async function tick(deps = {}) {
   const quoteFn = deps.getQuote ?? getQuote;
-  const logFn = deps.log ?? log;
-  const notifyFn = deps.notify ?? notify;
+  const logFn = deps.log ?? deps.logFn ?? log;
+  const notifyFn = deps.notify ?? deps.notifyFn ?? notify;
   const now = deps.now ? deps.now() : Date.now();
 
   if (busy) return;

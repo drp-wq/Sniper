@@ -1,5 +1,8 @@
 import React, { useMemo, useState, useRef } from 'react';
-import * as d3 from 'd3';
+import { scaleTime, scaleLinear } from 'd3-scale';
+import { max, bisector } from 'd3-array';
+import { line, area, curveMonotoneX } from 'd3-shape';
+import { timeFormat } from 'd3-time-format';
 import { Sparkles, Maximize2, Zap, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 
 interface PricePoint {
@@ -77,24 +80,22 @@ export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
     const pMin = Math.min(...prices) * 0.985;
     const pMax = Math.max(...prices) * 1.015;
 
-    const x = d3.scaleTime().domain([xMin, xMax]).range([0, innerWidth]);
-    const y = d3.scaleLinear().domain([pMin, pMax]).range([innerHeight, 0]);
+    const x = scaleTime().domain([xMin, xMax]).range([0, innerWidth]);
+    const y = scaleLinear().domain([pMin, pMax]).range([innerHeight, 0]);
 
-    const maxVol = d3.max(chartData, (d) => d.volume) || 50000;
-    const yVol = d3.scaleLinear().domain([0, maxVol]).range([innerHeight, innerHeight - 35]);
+    const maxVol = max(chartData, (d) => d.volume) || 50000;
+    const yVol = scaleLinear().domain([0, maxVol]).range([innerHeight, innerHeight - 35]);
 
-    const lineGen = d3
-      .line<PricePoint>()
+    const lineGen = line<PricePoint>()
       .x((d) => x(d.time))
       .y((d) => y(d.price))
-      .curve(d3.curveMonotoneX);
+      .curve(curveMonotoneX);
 
-    const areaGen = d3
-      .area<PricePoint>()
+    const areaGen = area<PricePoint>()
       .x((d) => x(d.time))
       .y0(innerHeight)
       .y1((d) => y(d.price))
-      .curve(d3.curveMonotoneX);
+      .curve(curveMonotoneX);
 
     return {
       xScale: x,
@@ -120,7 +121,7 @@ export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
     const hoveredTime = xScale.invert(clampedX);
 
     // Bisect to nearest point
-    const bisect = d3.bisector<PricePoint, Date>((d) => d.time).center;
+    const bisect = bisector<PricePoint, Date>((d) => d.time).center;
     const idx = bisect(chartData, hoveredTime);
     const point = chartData[idx] || chartData[chartData.length - 1];
 
@@ -129,7 +130,7 @@ export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
       setHoveredPoint({
         price: point.price,
         delta,
-        time: d3.timeFormat('%H:%M:%S')(point.time)
+        time: timeFormat('%H:%M:%S')(point.time)
       });
     }
   };
@@ -351,7 +352,7 @@ export const PositionD3Chart: React.FC<PositionD3ChartProps> = ({
                 fontFamily="JetBrains Mono, monospace"
                 textAnchor="middle"
               >
-                {d3.timeFormat('%H:%M')(d.time)}
+                {timeFormat('%H:%M')(d.time)}
               </text>
             ))}
           </g>
