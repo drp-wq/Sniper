@@ -2,7 +2,7 @@ name: CI (Sniper Telegram Mini App & Paper Bot)
 
 on:
   push:
-    branches: [ main, master, audit-fix-sniper-integration ]
+    branches: [ main, master, audit-fix-sniper-integration, feat/telegram-gmgn-integration ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -23,6 +23,9 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
+
+      - name: Run CI Secret Scan
+        run: npm run secret-scan
 
       - name: Run Unit & Security Test Suite
         run: npm test

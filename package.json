@@ -13,8 +13,9 @@
     "scanner": "node src/scanner.js",
     "sim": "node scripts/simulate.js",
     "backtest": "node scripts/execute-backtest.js",
+    "secret-scan": "node scripts/secret-scan.js",
     "build:dashboard": "./scripts/build-dashboard.sh",
     "lint:dashboard": "cd dashboard && npm run lint",
-    "ci": "npm test && npm run lint:dashboard && npm run build:dashboard"
+    "ci": "npm run secret-scan && npm test && npm run lint:dashboard && npm run build:dashboard"
   }
 }
