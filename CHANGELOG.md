@@ -2,6 +2,17 @@
 
 All notable changes to `sniper-bot` are documented here.
 
+## [2.0.0-checkpoint] - 2026-10-30
+
+### Master Prompt v2 Quant & Research Pipeline
+- **Phase 1 (Research & Threat Taxonomy)**: Authored `research/scam_taxonomy.md` covering mint/freeze authorities, Token-2022 extensions (`TransferFeeConfig`, `PermanentDelegate`, `TransferHook`, `DefaultAccountStateFrozen`), bundled Slot-0 launches, insider cluster distribution, honeypots, wash trading, and prompt injection in metadata. Evaluated 6 strategies in `research/strategies.md`.
+- **Phase 2 (Judging Rubric & Ranking)**: Implemented 7-factor weighted scoring rubric in `research/ranking.md`. Approved Strategy 3 (4.35) and Strategy 6 (4.03). Rejected Genesis Snipe (0.78), Migration Snipe (2.13), Copy Trading (1.50), and Social Scraping (1.48). Checkpoint 1 approved.
+- **Phase 3 (Architecture & Threat Model)**: Designed modular zero-dependency architecture in `docs/architecture.md` with 8 component specifications, TypeScript data schemas, failure-mode matrix, and comprehensive threat model. Zero external runtime dependencies justified in `docs/dependencies.md`. Checkpoint 2 approved.
+- **Phase 4 (Implementation Realism & Sizing)**: Created `src/sizing.js` (Capped Fractional Kelly, Fixed Fraction, daily drawdown dampener) and `src/simulator.js` (constant-product bonding curve price impact, sandwich extraction, honeypot revert trapping, congestion modeling, string sanitization). Expanded zero-dependency test suite to 75 passing tests.
+- **Phase 5 (Walk-Forward Backtesting & Validation)**: Implemented deterministic chronological walk-forward engine (`src/backtest.js`, `scripts/execute-backtest.js`) across 1,000 survivorship-free launches (Train 40% / Val 30% / Test 30%). Pre-registered $K = 9$ parameter variants with Bonferroni FWER control ($\alpha_{\text{adj}} = 0.0055$). Out-of-sample test results: Win Rate 31.03%, Expectancy +16.56%, Profit Factor 2.66, Sortino 1.05, MaxDD 0.81%, Rug Hit Rate 0.0% (vs 72.89% Naive Liquidity Baseline). Checkpoint 3 approved.
+- **Phase 6 & 7 (Paper Mirror & Live-Readiness Gate)**: Audited live running paper trading mirror ($N=42$ closed trades). Concluded **NOT READY FOR LIVE TRADING** due to cold cycle paper expectancy (-9.88%) and 33.6s public webhook relay latency. Live execution remains physically disabled and hard-locked.
+- **Phase 8 (Operational Hardening)**: Authored `strategy/final.config.json` (versioned config), `reports/final_report.md` (methodology, limitations, honest confidence statement), `ops/monitoring.md` (telemetry, pause conditions, re-validation cadence), `ops/capital_plan.md` (phased staging, legal/tax compliance, anti-auto-scale rules), and updated `docs/runbook.md` (secret rotation, incident response).
+
 ## [Unreleased] - 2026-10-29
 
 ### Safety Gate
